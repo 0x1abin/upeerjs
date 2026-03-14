@@ -16,7 +16,7 @@ PeerJS requires you to deploy and maintain a dedicated [PeerServer](https://gith
 ## Install
 
 ```bash
-pnpm add upeerjs
+npm install upeerjs
 ```
 
 ## Quick Start
