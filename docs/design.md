@@ -48,13 +48,12 @@ Application-level concerns (like uipcatjs) layer on top of uPeerJS.
 └──────────────┬──────────────────────────┘
                │ Events + send/receive
 ┌──────────────▼──────────────────────────┐
-│ UPeer (connection orchestrator)         │
+│ Peer (connection orchestrator)          │
 ├─────────────────────────────────────────┤
-│ MediaConnection   │  DataConnection     │
-│ (WebRTC media)    │  (DataChannel)      │
+│ RtcSession        │  DataConnection     │
+│ (RTCPeerConnection│  (DataChannel)      │
+│  + media tracks)  │                     │
 ├───────────────────┴─────────────────────┤
-│ RtcSession (RTCPeerConnection wrapper)  │
-├─────────────────────────────────────────┤
 │ SignalingBatcher (signal batching)      │
 ├─────────────────────────────────────────┤
 │ ISignalingTransport ←── MqttTransport   │
@@ -69,13 +68,12 @@ Application-level concerns (like uipcatjs) layer on top of uPeerJS.
 
 | Layer | Responsibility |
 |---|---|
-| **UPeer** | Entry point. Creates/manages connections, routes signaling messages, emits typed events. |
-| **MediaConnection** | Represents a media stream connection with a remote peer. Wraps RtcSession for media track management. |
+| **Peer** | Entry point. Creates/manages sessions, data connections, routes signaling messages, emits typed events. Extends EventEmitter3. |
+| **RtcSession** | Manages a single RTCPeerConnection lifecycle: offer/answer creation, ICE candidate handling, track management, DataChannel creation. One per remote peer. Emits `stream`, `iceStateChanged`, `close`, `signaling`, `dataChannel` events. |
 | **DataConnection** | Wraps RTCDataChannel with streaming, backpressure, chunking, and MessagePack serialization. |
-| **RtcSession** | Manages a single RTCPeerConnection lifecycle: offer/answer creation, ICE candidate handling, track management. |
 | **SignalingBatcher** | Batches signaling items (SDP, ICE candidates) with 16ms debounce to reduce MQTT messages. |
-| **ISignalingTransport** | Abstract interface for sending/receiving signaling. Default: MqttTransport. |
-| **IEncryption** | Abstract interface for encrypting/decrypting signaling payloads. Default: AesGcmEncryption. |
+| **MqttTransport** | Default `ISignalingTransport` implementation. Publishes/subscribes to MQTT topics for signaling. Extends EventEmitter3, emits `open`, `close`, `error`, `disconnected`. |
+| **AesGcmEncryption** | Default `IEncryption` implementation using Web Crypto AES-GCM. |
 
 ---
 
@@ -86,29 +84,29 @@ upeerjs/
 ├── src/
 │   ├── index.ts                  # Public API exports
 │   ├── types.ts                  # All TypeScript interfaces and types
-│   ├── UPeer.ts                  # Main entry, connection orchestrator
+│   ├── peer.ts                   # Main entry, connection orchestrator
 │   │
 │   ├── transport/
-│   │   ├── ISignalingTransport.ts    # Abstract transport interface
-│   │   └── MqttTransport.ts         # MQTT-over-WebSocket implementation
+│   │   └── mqtt-transport.ts     # MQTT-over-WebSocket implementation
 │   │
 │   ├── security/
-│   │   ├── IEncryption.ts           # Encryption interface
-│   │   └── AesGcmEncryption.ts      # AES-GCM implementation
+│   │   └── aes-gcm-encryption.ts # AES-GCM implementation
 │   │
 │   ├── connection/
-│   │   ├── RtcSession.ts            # RTCPeerConnection lifecycle
-│   │   └── SignalingBatcher.ts      # Signal batching/debounce
+│   │   ├── rtc-session.ts        # RTCPeerConnection lifecycle
+│   │   └── signaling-batcher.ts  # Signal batching/debounce
 │   │
 │   ├── data/
-│   │   └── DataConnection.ts        # DataChannel wrapper with streaming
+│   │   └── data-connection.ts    # DataChannel wrapper with streaming
 │   │
 │   └── util/
-│       ├── IdGenerator.ts           # nanoid peer ID generation
-│       └── Codec.ts                 # MessagePack + JSON codec
+│       ├── id-generator.ts       # nanoid peer ID generation
+│       ├── codec.ts              # JSON codec (default)
+│       └── constants.ts          # VERSION, DEFAULT_RTC_CONFIG
 │
+├── test/                        # Tests mirror src/ structure
 ├── docs/
-│   └── design.md                 # This document
+│   └── design.md                # This document
 ├── package.json
 ├── tsconfig.json
 └── README.md
@@ -120,136 +118,116 @@ Single package (not monorepo). Simple, like PeerJS.
 
 ## 4. Core TypeScript Interfaces
 
-### UPeerOptions (Application API)
+### PeerOptions
 
-The primary API is intentionally simple. Users only need a `secretKey` — encryption and transport are handled internally:
+The primary API is intentionally simple. Users only need a `securityKey` — encryption and transport are handled internally:
 
 ```typescript
-interface UPeerOptions {
-  /** Shared secret for E2E encryption on signaling. AES-GCM is used automatically. */
-  secretKey?: string;
+interface PeerOptions {
+  /** MQTT broker URL (wss://...). Defaults to wss://broker.emqx.io:8084/mqtt */
+  brokerUrl?: string;
 
-  /** MQTT broker configuration. Sensible defaults provided. */
-  mqtt?: {
-    /** Broker hostname (default: 'mqtt-cn.uipcat.com') */
-    hostname?: string;
-    /** Broker port (default: 8084) */
-    port?: number;
-    /** WebSocket path (default: '/mqtt') */
-    path?: string;
-    /** Use secure WebSocket (default: true) */
-    ssl?: boolean;
-  };
+  /** Optional MQTT client options */
+  mqttOptions?: Omit<IClientOptions, 'will'>;
 
-  /** ICE servers for WebRTC (default: [{ urls: 'stun:stun.cloudflare.com:3478' }]) */
-  iceServers?: RTCIceServer[];
+  /** E2E encryption key (raw string, must be 16/24/32 bytes for AES) */
+  securityKey?: string;
+
+  /** WebRTC configuration (ICE servers, etc.) */
+  rtcConfig?: RTCConfiguration;
+
+  /** Custom codec for signaling messages (default: JSON) */
+  codec?: ICodec;
+
+  /** Custom encryption implementation */
+  encryption?: IEncryption;
 
   /** Enable debug logging */
   debug?: boolean;
 }
 ```
 
-**Design rationale:** Most users want P2P with encryption — they should not need to import `MqttTransport` or `AesGcmEncryption`. Provide `secretKey` and it just works. Omit `secretKey` for plaintext signaling.
-
-### UPeerAdvancedOptions (Escape Hatch)
-
-For advanced users who need custom transport or encryption, the constructor accepts a second overload:
-
-```typescript
-interface UPeerAdvancedOptions {
-  /** Custom signaling transport (replaces built-in MQTT) */
-  transport: ISignalingTransport;
-
-  /** Custom encryption (replaces built-in AES-GCM). Set to `false` to disable. */
-  encryption?: IEncryption | false;
-
-  /** RTCPeerConnection configuration */
-  config?: RTCConfiguration;
-
-  /** Enable debug logging */
-  debug?: boolean;
-}
-```
+**Design rationale:** Most users want P2P with encryption — they should not need to import `MqttTransport` or `AesGcmEncryption`. Provide `securityKey` and it just works. Omit `securityKey` for plaintext signaling. If `encryption` is provided, it takes precedence over `securityKey`.
 
 ```typescript
 // Simple API — most users
-const peer = new UPeer('my-id', { secretKey: 'room-secret' });
+const peer = new Peer('my-id', { securityKey: 'room-secret' });
 
-// Advanced API — custom transport
-const peer = new UPeer('my-id', { transport: new WebSocketTransport() });
+// Custom encryption
+const peer = new Peer('my-id', { encryption: new MyEncryption() });
+
+// Custom broker
+const peer = new Peer('my-id', {
+  securityKey: 'room-secret',
+  brokerUrl: 'wss://mqtt.example.com:8084/mqtt',
+});
 ```
-
-The constructor distinguishes the two overloads by checking for the `transport` property.
 
 ### ISignalingTransport
 
 ```typescript
 interface ISignalingTransport {
-  /** Connect to the signaling service and subscribe to messages for this peer */
-  connect(peerId: string): Promise<void>;
+  /** Whether the transport is connected and subscribed */
+  readonly connected: boolean;
 
-  /** Send a signaling message to a remote peer */
-  send(peerId: string, message: SignalingMessage): Promise<void>;
+  /** Connect to the signaling service */
+  connect(): void;
+
+  /** Send encrypted/encoded data to a remote peer */
+  send(peerId: string, data: Uint8Array): void;
 
   /** Register a handler for incoming signaling messages */
-  onMessage(handler: (message: SignalingMessage) => void): void;
+  onMessage(handler: TransportMessageHandler): void;
 
   /** Disconnect from the signaling service */
   disconnect(): void;
-
-  /** Connection state */
-  readonly connected: boolean;
 }
+
+type TransportMessageHandler = (message: SignalingMessage) => void;
 ```
 
-### MqttTransportOptions
-
-```typescript
-interface MqttTransportOptions {
-  /** MQTT broker hostname */
-  hostname: string;
-
-  /** MQTT broker port (typically 8083 or 8084 for WSS) */
-  port: number;
-
-  /** MQTT WebSocket path (default: '/mqtt') */
-  path?: string;
-
-  /** Use secure WebSocket (default: true) */
-  ssl?: boolean;
-
-  /** MQTT keepalive in seconds (default: 60) */
-  keepalive?: number;
-
-  /** MQTT reconnect period in ms (default: 30000) */
-  reconnectPeriod?: number;
-
-  /** MQTT connect timeout in ms (default: 32000) */
-  connectTimeout?: number;
-}
-```
+**Note:** The transport receives and dispatches already-decoded `SignalingMessage` objects (codec decode + encryption decrypt happen inside `MqttTransport`). The `send()` method takes pre-encoded `Uint8Array` (codec encode happens in `Peer`, encryption happens inside `MqttTransport`).
 
 ### IEncryption
 
 ```typescript
 interface IEncryption {
-  /** Encrypt a Uint8Array payload */
-  encrypt(data: Uint8Array): Promise<Uint8Array>;
-
-  /** Decrypt a Uint8Array payload */
-  decrypt(data: Uint8Array): Promise<Uint8Array>;
-
   /** Whether encryption is ready to use */
   readonly ready: boolean;
 
   /** Wait until encryption is initialized */
   waitReady(): Promise<void>;
+
+  /** Encrypt a Uint8Array payload */
+  encrypt(data: Uint8Array): Promise<Uint8Array>;
+
+  /** Decrypt a Uint8Array payload */
+  decrypt(data: Uint8Array): Promise<Uint8Array>;
+}
+```
+
+### ICodec
+
+```typescript
+interface ICodec {
+  /** Encode data to binary */
+  encode(data: any): Uint8Array;
+
+  /** Decode binary to data */
+  decode(data: Uint8Array): any;
 }
 ```
 
 ### SignalingMessage
 
 ```typescript
+enum SignalingType {
+  Candidate = 'candidate',
+  Offer = 'offer',
+  Answer = 'answer',
+  Leave = 'leave',
+}
+
 interface SignalingMessage {
   /** Message type identifier */
   type: 'signaling';
@@ -261,101 +239,16 @@ interface SignalingMessage {
   data: SignalingItem[];
 }
 
-type SignalingItemType = 'offer' | 'answer' | 'candidate' | 'leave';
-
 interface SignalingItem {
-  type: SignalingItemType;
-  payload: OfferPayload | AnswerPayload | CandidatePayload | LeavePayload;
-}
-
-interface OfferPayload {
-  sdp: RTCSessionDescriptionInit;
-  config?: RTCConfiguration;
-}
-
-interface AnswerPayload {
-  sdp: RTCSessionDescriptionInit;
-}
-
-interface CandidatePayload {
-  candidate: RTCIceCandidateInit;
-}
-
-interface LeavePayload {}
-```
-
-### MediaConnection
-
-```typescript
-interface MediaConnectionEvents {
-  stream: (remoteStream: MediaStream) => void;
-  close: () => void;
-  error: (error: Error) => void;
-  iceStateChanged: (state: RTCIceConnectionState) => void;
-}
-
-declare class MediaConnection {
-  /** Remote peer ID */
-  readonly peer: string;
-
-  /** Local MediaStream */
-  readonly localStream: MediaStream | null;
-
-  /** Remote MediaStream (available after 'stream' event) */
-  readonly remoteStream: MediaStream | null;
-
-  /** Underlying RTCPeerConnection */
-  readonly peerConnection: RTCPeerConnection | null;
-
-  /** Answer an incoming call with a local stream */
-  answer(stream?: MediaStream): void;
-
-  /** Close the media connection */
-  close(): void;
-
-  /** Typed event emitter methods */
-  on<K extends keyof MediaConnectionEvents>(
-    event: K,
-    listener: MediaConnectionEvents[K]
-  ): this;
+  type: SignalingType;
+  payload: any;
 }
 ```
 
-### DataConnection
+### PeerEvents
 
 ```typescript
-interface DataConnectionEvents {
-  open: () => void;
-  data: (data: unknown) => void;
-  close: () => void;
-  error: (error: Error) => void;
-}
-
-declare class DataConnection {
-  /** Remote peer ID */
-  readonly peer: string;
-
-  /** Whether the DataChannel is open */
-  readonly open: boolean;
-
-  /** Send data (MessagePack serialized, chunked, backpressure-aware) */
-  send(data: unknown): Promise<void>;
-
-  /** Close the data connection */
-  close(): void;
-
-  /** Typed event emitter methods */
-  on<K extends keyof DataConnectionEvents>(
-    event: K,
-    listener: DataConnectionEvents[K]
-  ): this;
-}
-```
-
-### UPeerEvents
-
-```typescript
-interface UPeerEvents {
+interface PeerEvents {
   /** Signaling transport connected, peer is reachable */
   open: (peerId: string) => void;
 
@@ -363,22 +256,22 @@ interface UPeerEvents {
   close: () => void;
 
   /** Error occurred */
-  error: (error: Error) => void;
+  error: (err: any) => void;
 
-  /** Incoming media call from remote peer */
-  call: (mediaConnection: MediaConnection) => void;
+  /** Incoming or outgoing media call */
+  call: (event: { peerId: string; call: RtcSession }) => void;
 
   /** Remote media stream received */
-  stream: (event: { peerId: string; stream: MediaStream; call: MediaConnection }) => void;
+  stream: (event: { peerId: string; stream: MediaStream; call: RtcSession }) => void;
 
   /** Media connection closed */
-  hangup: (event: { peerId: string; call: MediaConnection }) => void;
+  hangup: (event: { peerId: string; call: RtcSession }) => void;
 
-  /** Incoming data connection from remote peer */
-  connection: (dataConnection: DataConnection) => void;
+  /** Incoming data connection opened */
+  dataConnection: (event: { peerId: string; conn: DataConnection }) => void;
 
   /** Data received on any connection */
-  data: (event: { peerId: string; data: unknown; conn: DataConnection }) => void;
+  data: (event: { peerId: string; data: any; conn: DataConnection }) => void;
 
   /** Data connection closed */
   dataDisconnect: (event: { peerId: string; conn: DataConnection }) => void;
@@ -386,21 +279,32 @@ interface UPeerEvents {
   /** ICE connection state changed */
   iceConnectionStateChange: (event: {
     peerId: string;
-    state: RTCIceConnectionState;
+    iceConnectionState: RTCIceConnectionState;
     peerConnection: RTCPeerConnection;
   }) => void;
 }
 ```
 
-### Codec
+### MediaConnectionEvents (on RtcSession)
 
 ```typescript
-interface ICodec {
-  /** Encode data to binary */
-  encode(data: unknown): Uint8Array;
+// RtcSession emits these events:
+interface RtcSessionEvents {
+  stream: (stream: MediaStream) => void;
+  iceStateChanged: (state: RTCIceConnectionState) => void;
+  close: () => void;
+  signaling: (items: SignalingItem[]) => void;
+  dataChannel: (dc: RTCDataChannel) => void;
+}
+```
 
-  /** Decode binary to data */
-  decode(data: Uint8Array): unknown;
+### DataConnectionEvents
+
+```typescript
+interface DataConnectionEvents {
+  open: () => void;
+  data: (data: any) => void;
+  close: () => void;
 }
 ```
 
@@ -420,10 +324,10 @@ To send a signaling message to a peer, publish to their peer ID topic.
 
 ### Message Format
 
-Messages are serialized with JSON (on the signaling channel), optionally encrypted with AES-GCM before publishing:
+Messages are serialized with the codec (default: JSON), optionally encrypted with AES-GCM before publishing:
 
 ```typescript
-// Wire format (JSON → encrypt → MQTT publish)
+// Wire format (Codec.encode → encrypt → MQTT publish)
 {
   type: "signaling",
   src: "sender-peer-id",
@@ -452,45 +356,36 @@ Messages are serialized with JSON (on the signaling channel), optionally encrypt
 ICE candidates arrive in rapid succession. Sending each as a separate MQTT message wastes bandwidth. The `SignalingBatcher` coalesces them:
 
 - **Debounce window:** 16ms (one frame)
-- **Max batch size:** 10 items — flush immediately if exceeded
+- **Flush threshold:** 10 items — flush immediately if exceeded (queue.length > threshold)
 - **Immediate flush:** Offer and Answer are sent immediately (no batching delay)
-- **Explicit flush:** `flush()` method for application-triggered sends
 
 ```typescript
 class SignalingBatcher {
   private _queue: SignalingItem[] = [];
   private _timer: ReturnType<typeof setTimeout> | null = null;
-  private _delay = 16;
-  private _maxBatch = 10;
+  private _delay: number;
+  private _flushThreshold: number;
+  private _onFlush: (items: SignalingItem[]) => void;
 
-  constructor(private _send: (items: SignalingItem[]) => void) {}
+  constructor(
+    onFlush: (items: SignalingItem[]) => void,
+    delay: number = 16,
+    flushThreshold: number = 10,
+  ) { ... }
 
-  push(item: SignalingItem, options?: { immediate?: boolean }): void {
-    this._queue.push(item);
+  push(type: SignalingType, payload: any, immediate?: boolean): void {
+    this._queue.push({ type, payload });
 
-    if (options?.immediate || this._queue.length >= this._maxBatch) {
-      this.flush();
+    if (immediate || this._queue.length > this._flushThreshold) {
+      this._flush();
     } else {
       if (this._timer) clearTimeout(this._timer);
-      this._timer = setTimeout(() => this.flush(), this._delay);
+      this._timer = setTimeout(() => this._flush(), this._delay);
     }
   }
 
-  flush(): void {
-    if (this._queue.length === 0) return;
-    const items = this._queue;
-    this._queue = [];
-    if (this._timer) {
-      clearTimeout(this._timer);
-      this._timer = null;
-    }
-    this._send(items);
-  }
-
-  destroy(): void {
-    if (this._timer) clearTimeout(this._timer);
-    this._queue = [];
-  }
+  private _flush(): void { ... }
+  destroy(): void { ... }
 }
 ```
 
@@ -500,37 +395,30 @@ class SignalingBatcher {
 
 ### Media + Data (Full WebRTC)
 
-The default mode when calling `peer.call(remotePeerId, localStream)`:
+The default mode when calling `peer.call(remotePeerId, stream)`:
 
 1. Create a single `RTCPeerConnection`
-2. Add local MediaStream tracks (audio + video)
-3. Create a DataChannel (`dc:upeer`) on the same connection
-4. Generate SDP offer and send via signaling
-5. Remote peer receives offer, adds their tracks, creates answer
-6. ICE candidates trickle via signaling batcher
-7. Once connected: media flows via RTP, data flows via DataChannel
+2. Add local MediaStream tracks (audio + video) if provided
+3. Add `recvonly` transceivers for audio/video if not already present
+4. Create a DataChannel (`dc:upeer`) on the same connection
+5. Generate SDP offer and send via signaling
+6. Remote peer receives offer, adds their tracks, creates answer
+7. ICE candidates trickle via signaling batcher
+8. Once connected: media flows via RTP, data flows via DataChannel
 
-```typescript
-// Offer constraints
-{ offerToReceiveAudio: true, offerToReceiveVideo: true }
-```
+If no stream is passed, it falls back to `peer.localStream` if set.
 
 ### Data-Only
 
 When calling `peer.connect(remotePeerId)`:
 
 1. Create a single `RTCPeerConnection`
-2. No media tracks added
+2. No media tracks or recvonly transceivers added
 3. Create a DataChannel (`dc:upeer`)
 4. Generate SDP offer with no media
 5. Standard ICE negotiation
 
-```typescript
-// Offer constraints
-{ offerToReceiveAudio: false, offerToReceiveVideo: false }
-```
-
-Both modes use the same `RtcSession` — the only difference is whether tracks are added before offer creation.
+Both modes use the same `RtcSession` — the only difference is whether tracks are added and whether recvonly transceivers are created before offer creation.
 
 ---
 
@@ -544,7 +432,7 @@ DataConnection wraps RTCDataChannel with the Web Streams API for backpressure-aw
   send(data)
       │
       ▼
-  MessagePack encode
+  MessagePack encode (via @msgpack/msgpack Encoder)
       │
       ▼
   TransformStream (32KB chunk splitter)
@@ -579,7 +467,7 @@ DataConnection wraps RTCDataChannel with the Web Streams API for backpressure-aw
 
 ### Backpressure
 
-When `dataChannel.bufferedAmount` exceeds `MAX_BUFFERED_AMOUNT - chunkSize`:
+When `dataChannel.bufferedAmount` exceeds `MAX_BUFFERED_AMOUNT - chunkByteLength`:
 
 1. Pause writing (await `bufferedamountlow` event)
 2. DataChannel fires `bufferedamountlow` when buffer drops below 4MB
@@ -589,11 +477,11 @@ This prevents memory buildup when the sender is faster than the network.
 
 ### Serialization
 
-- **Default:** MessagePack via `@msgpack/msgpack`
+- **Signaling channel:** JSON codec (default) via `JsonCodec` — pluggable via `ICodec` interface
+- **DataChannel:** MessagePack via `@msgpack/msgpack`
   - Binary format, ~30% smaller than JSON for typical payloads
   - Supports all JSON types + binary (Uint8Array, ArrayBuffer)
   - Streaming decode via `decodeMultiStream` for automatic chunk reassembly
-- **Fallback:** JSON codec available via `Codec` abstraction
 
 ---
 
@@ -612,7 +500,7 @@ uPeerJS encrypts signaling with AES-GCM:
 ┌──────────────────────────────────────┐
 │ Plaintext signaling (JSON)           │
 └──────────────┬───────────────────────┘
-               │ JSON.encode → Uint8Array
+               │ Codec.encode → Uint8Array
                ▼
 ┌──────────────────────────────────────┐
 │ AES-GCM encrypt                     │
@@ -629,10 +517,10 @@ uPeerJS encrypts signaling with AES-GCM:
 
 ### Key Derivation
 
-The shared secret (e.g., from URL hash `#secretKey`) is imported as a raw AES-GCM key:
+The security key is imported as a raw AES-GCM key:
 
 ```typescript
-const raw = new TextEncoder().encode(sharedSecret);
+const raw = new TextEncoder().encode(securityKey);
 const key = await crypto.subtle.importKey(
   'raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
 );
@@ -651,7 +539,7 @@ const key = await crypto.subtle.importKey(
 The `IEncryption` interface allows applications to provide custom encryption:
 
 ```typescript
-import { UPeer } from 'upeerjs';
+import { Peer } from 'upeerjs';
 import type { IEncryption } from 'upeerjs';
 
 class MyEncryption implements IEncryption {
@@ -661,14 +549,10 @@ class MyEncryption implements IEncryption {
   async decrypt(data: Uint8Array): Promise<Uint8Array> { /* ... */ }
 }
 
-// Advanced overload — custom encryption replaces built-in AES-GCM
-const peer = new UPeer('id', {
-  transport: new MqttTransport({ hostname: '...' }),
-  encryption: new MyEncryption(),
-});
+const peer = new Peer('id', { encryption: new MyEncryption() });
 ```
 
-To disable encryption entirely, simply omit the `secretKey` option (simple API) or set `encryption: false` (advanced API).
+To disable encryption entirely, simply omit the `securityKey` option.
 
 ---
 
@@ -677,35 +561,37 @@ To disable encryption entirely, simply omit the `secretKey` option (simple API) 
 ### Creating a Peer
 
 ```typescript
-import { UPeer } from 'upeerjs';
+import { Peer } from 'upeerjs';
 
 // Minimal — auto-generated ID, no encryption, default MQTT broker
-const peer = new UPeer();
+const peer = new Peer({});
 
 // With peer ID + encryption
-const peer = new UPeer('my-peer-id', { secretKey: 'shared-secret' });
+const peer = new Peer('my-peer-id', { securityKey: 'shared-secret' });
 
 // With custom MQTT broker
-const peer = new UPeer('my-peer-id', {
-  secretKey: 'shared-secret',
-  mqtt: { hostname: 'mqtt.example.com', port: 8084 },
+const peer = new Peer('my-peer-id', {
+  securityKey: 'shared-secret',
+  brokerUrl: 'wss://mqtt.example.com:8084/mqtt',
 });
 
-// With custom ICE servers
-const peer = new UPeer('my-peer-id', {
-  secretKey: 'shared-secret',
-  iceServers: [
-    { urls: 'stun:stun.cloudflare.com:3478' },
-    { urls: 'turn:turn.example.com', username: 'user', credential: 'pass' },
-  ],
+// With custom RTC configuration
+const peer = new Peer('my-peer-id', {
+  securityKey: 'shared-secret',
+  rtcConfig: {
+    iceServers: [
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      { urls: 'turn:turn.example.com', username: 'user', credential: 'pass' },
+    ],
+  },
 });
 ```
 
 If no peer ID is provided, one is auto-generated via nanoid:
 
 ```typescript
-const peer = new UPeer();
-// peer.id → "V1StGXR8_Z5jdHi6B-myT"
+const peer = new Peer({});
+// peer.peerId → "V1StGXR8_Z5jdHi6B-myT"
 ```
 
 ### Connection Events
@@ -717,19 +603,19 @@ peer.on('open', (id) => {
 });
 
 // Incoming media call
-peer.on('call', (mediaConn) => {
-  // Answer with local stream
-  mediaConn.answer(localStream);
+peer.on('call', ({ peerId, call }) => {
+  // call is an RtcSession
+  // Remote stream arrives via the 'stream' event on the Peer instance
+});
 
-  // Receive remote stream
-  mediaConn.on('stream', (remoteStream) => {
-    videoElement.srcObject = remoteStream;
-  });
+// Remote stream received
+peer.on('stream', ({ peerId, stream, call }) => {
+  videoElement.srcObject = stream;
 });
 
 // Incoming data connection
-peer.on('connection', (dataConn) => {
-  dataConn.on('data', (data) => {
+peer.on('dataConnection', ({ peerId, conn }) => {
+  conn.on('data', (data) => {
     console.log('Received:', data);
   });
 });
@@ -748,40 +634,41 @@ peer.on('close', () => {
 ### Making a Call (Media + Data)
 
 ```typescript
-const call = peer.call('remote-peer-id', localStream);
+const session = peer.call('remote-peer-id', localStream);
 
-call.on('stream', (remoteStream) => {
-  videoElement.srcObject = remoteStream;
+peer.on('stream', ({ peerId, stream }) => {
+  videoElement.srcObject = stream;
 });
 
-call.on('close', () => {
-  console.log('Call ended');
+peer.on('hangup', ({ peerId }) => {
+  console.log('Call ended with', peerId);
 });
 ```
 
 ### Data-Only Connection
 
 ```typescript
-const conn = peer.connect('remote-peer-id');
+const session = peer.connect('remote-peer-id');
 
-conn.on('open', () => {
-  conn.send({ hello: 'world' });
-  conn.send(new Uint8Array([1, 2, 3])); // Binary data supported
+peer.on('dataConnection', ({ peerId, conn }) => {
+  conn.on('open', () => {
+    conn.send({ hello: 'world' });
+    conn.send(new Uint8Array([1, 2, 3])); // Binary data supported
+  });
 });
 
-conn.on('data', (data) => {
-  console.log('Received:', data);
-});
+// Or use the convenience method
+peer.send('remote-peer-id', { hello: 'world' });
 ```
 
 ### Replacing Media Tracks
 
 ```typescript
-// Replace video track (e.g., switch camera)
-peer.replaceTrack('remote-peer-id', 'video', newVideoTrack);
+// Replace all tracks from a new stream
+peer.replaceTrack('remote-peer-id', newStream);
 
-// Replace audio track (e.g., switch microphone)
-peer.replaceTrack('remote-peer-id', 'audio', newAudioTrack);
+// Set local stream and update all active sessions
+peer.setLocalStream(newStream);
 ```
 
 ### Broadcasting Data
@@ -800,62 +687,70 @@ peer.broadcast(data, { excludeId: ['peer-to-skip'] });
 // Hang up a specific call
 peer.hangup('remote-peer-id');
 
-// Disconnect a data connection
-peer.disconnect('remote-peer-id');
+// Disconnect a data-only connection
+peer.dataDisconnect('remote-peer-id');
 
-// Destroy the peer (close all connections + signaling)
+// Disconnect from signaling, close all sessions
+peer.disconnect();
+
+// Destroy the peer (disconnect + remove all listeners)
 peer.destroy();
 ```
 
-### Full UPeer API Summary
+### Full Peer API Summary
 
 ```typescript
-class UPeer {
+class Peer extends EventEmitter {
   /** The local peer ID */
-  readonly id: string;
+  readonly peerId: string;
 
-  /** All active media connections */
-  readonly mediaConnections: ReadonlyMap<string, MediaConnection>;
+  /** Local MediaStream (set via setLocalStream or used as fallback in call()) */
+  localStream: MediaStream | null;
 
-  /** All active data connections */
-  readonly dataConnections: ReadonlyMap<string, DataConnection>;
+  /** Whether signaling transport is connected */
+  readonly connected: boolean;
 
-  /** Simple API: peerId + secretKey */
-  constructor(id?: string, options?: UPeerOptions);
-  /** Advanced API: custom transport/encryption */
-  constructor(id?: string, options?: UPeerAdvancedOptions);
+  /** Constructor overloads */
+  constructor(options: PeerOptions);
+  constructor(peerId: string, options: PeerOptions);
 
-  /** Start signaling and listen for connections */
-  start(): Promise<void>;
+  /** Connect to the MQTT signaling broker */
+  start(): void;
 
-  /** Call a remote peer with a media stream (creates media + data connection) */
-  call(remotePeerId: string, stream: MediaStream): MediaConnection;
+  /** Initiate a media + data call to a peer */
+  call(peerId: string, stream?: MediaStream): RtcSession;
 
   /** Open a data-only connection to a remote peer */
-  connect(remotePeerId: string): DataConnection;
+  connect(peerId: string): RtcSession;
 
-  /** Send data to a specific peer */
-  send(peerId: string, data: unknown): void;
+  /** Send data to a specific peer via DataChannel */
+  send(peerId: string, data: any): void;
 
   /** Broadcast data to all connected peers */
-  broadcast(data: unknown, options?: { excludeId?: string[] }): void;
+  broadcast(data: any, options?: { excludeId?: string[] }): void;
 
-  /** Replace a media track for a specific peer */
-  replaceTrack(peerId: string, kind: 'audio' | 'video', track: MediaStreamTrack): void;
+  /** Replace media tracks for a specific peer */
+  replaceTrack(peerId: string, stream: MediaStream): void;
 
-  /** Hang up a media connection */
+  /** Set local stream and update all active sessions */
+  setLocalStream(stream: MediaStream): void;
+
+  /** Hang up a specific peer connection */
   hangup(peerId: string): void;
 
-  /** Disconnect a data connection */
-  disconnect(peerId: string): void;
+  /** Disconnect a data-only connection */
+  dataDisconnect(peerId: string): void;
 
-  /** Destroy the peer — close all connections and signaling */
+  /** Disconnect from signaling, close all sessions */
+  disconnect(): void;
+
+  /** Fully destroy this peer instance */
   destroy(): void;
 
-  /** Typed event emitter */
-  on<K extends keyof UPeerEvents>(event: K, listener: UPeerEvents[K]): this;
-  off<K extends keyof UPeerEvents>(event: K, listener: UPeerEvents[K]): this;
-  once<K extends keyof UPeerEvents>(event: K, listener: UPeerEvents[K]): this;
+  /** Typed event emitter (via eventemitter3) */
+  on<K extends keyof PeerEvents>(event: K, listener: PeerEvents[K]): this;
+  off<K extends keyof PeerEvents>(event: K, listener: PeerEvents[K]): this;
+  once<K extends keyof PeerEvents>(event: K, listener: PeerEvents[K]): this;
 }
 ```
 
@@ -868,11 +763,11 @@ This table maps existing uIPCat composables to uPeerJS components:
 | uIPCat Source | uPeerJS Component | Included? | Notes |
 |---|---|---|---|
 | `overMQTT.ts` → `OverMQTT` | `MqttTransport` + `AesGcmEncryption` | Yes | Split into transport + encryption |
-| `peerClient.ts` → `PeerClient` | `UPeer` | Yes | Without `notify()` / `watch()` (app layer) |
-| `mediaconnection.ts` → `MediaConnection` | `MediaConnection` + `RtcSession` | Yes | Merged negotiator into RtcSession |
+| `peerClient.ts` → `PeerClient` | `Peer` | Yes | Without `notify()` / `watch()` (app layer) |
+| `mediaconnection.ts` → `MediaConnection` | `RtcSession` | Yes | No separate MediaConnection — RtcSession handles both media and signaling |
 | `negotiator.ts` → `Negotiator` | `RtcSession` | Yes | Unified with MediaConnection |
 | `StreamConnection.ts` → `StreamConnection` | `DataConnection` | Yes | Same streaming/backpressure design |
-| `jsonpack.ts` → `Encoder/Decoder` | `Codec` (pluggable) | Yes | Default: MessagePack |
+| `jsonpack.ts` → `Encoder/Decoder` | `JsonCodec` (pluggable via `ICodec`) | Yes | Default: JSON, DataChannel uses MessagePack |
 | `peerClient.ts` → `notify()` / `watch()` | — | **No** | Application layer concern |
 | Msgbus / RpcBus / SyncBus | — | **No** | Application layer concern |
 | Motion detection, recording | — | **No** | Application layer concern |
@@ -881,11 +776,11 @@ This table maps existing uIPCat composables to uPeerJS components:
 
 1. **OverMQTT → MqttTransport + AesGcmEncryption**: The current `OverMQTT` mixes MQTT transport with AES-GCM encryption. uPeerJS separates these into two pluggable interfaces.
 
-2. **MediaConnection + Negotiator → RtcSession**: The current split between `MediaConnection` (state) and `Negotiator` (RTCPeerConnection management) is merged into `RtcSession` which owns the full connection lifecycle. `MediaConnection` becomes a thin event-emitting wrapper.
+2. **MediaConnection + Negotiator → RtcSession**: The current split between `MediaConnection` (state) and `Negotiator` (RTCPeerConnection management) is merged into `RtcSession` which owns the full connection lifecycle. There is no separate `MediaConnection` class — `RtcSession` handles media tracks, DataChannel, and signaling.
 
 3. **Signal batching extracted**: The current signal queue in `MediaConnection` becomes a standalone `SignalingBatcher` that can be reused and tested independently.
 
-4. **PeerClient → UPeer**: Drops `notify()` and `watch()` (MQTT pub/sub for presence) — these are uIPCat-specific and belong in the application layer.
+4. **PeerClient → Peer**: Drops `notify()` and `watch()` (MQTT pub/sub for presence) — these are uIPCat-specific and belong in the application layer.
 
 ---
 
@@ -894,98 +789,57 @@ This table maps existing uIPCat composables to uPeerJS components:
 ### Basic Video Call (Browser to Browser)
 
 ```typescript
-import { UPeer } from 'upeerjs';
+import { Peer } from 'upeerjs';
 
 // --- Peer A (caller) ---
-const peerA = new UPeer('alice', { secretKey: 'room-secret' });
-await peerA.start();
+const peerA = new Peer('alice', { securityKey: 'room-secret' });
+peerA.start();
 
 const localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-const call = peerA.call('bob', localStream);
+const session = peerA.call('bob', localStream);
 
-call.on('stream', (remoteStream) => {
-  document.querySelector<HTMLVideoElement>('#remote')!.srcObject = remoteStream;
+peerA.on('stream', ({ peerId, stream }) => {
+  document.querySelector<HTMLVideoElement>('#remote')!.srcObject = stream;
 });
 
 // --- Peer B (callee) ---
-const peerB = new UPeer('bob', { secretKey: 'room-secret' });
-await peerB.start();
+const peerB = new Peer('bob', { securityKey: 'room-secret' });
+peerB.start();
 
-peerB.on('call', async (mediaConn) => {
-  const localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-  mediaConn.answer(localStream);
-  mediaConn.on('stream', (remoteStream) => {
-    document.querySelector<HTMLVideoElement>('#remote')!.srcObject = remoteStream;
-  });
+// Set local stream so incoming calls automatically include it
+const localStreamB = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+peerB.localStream = localStreamB;
+
+peerB.on('stream', ({ peerId, stream }) => {
+  document.querySelector<HTMLVideoElement>('#remote')!.srcObject = stream;
 });
 ```
 
 ### Data-Only Connection (File Transfer)
 
 ```typescript
-import { UPeer } from 'upeerjs';
+import { Peer } from 'upeerjs';
 
 // Sender
-const sender = new UPeer('sender', { secretKey: 'file-key' });
-await sender.start();
-const conn = sender.connect('receiver');
+const sender = new Peer('sender', { securityKey: 'file-key' });
+sender.start();
+const session = sender.connect('receiver');
 
-conn.on('open', async () => {
+sender.on('dataConnection', ({ conn }) => {
   const file = await fetch('/large-file.bin').then(r => r.arrayBuffer());
   // Automatically chunked and backpressure-managed
   await conn.send(new Uint8Array(file));
 });
 
 // Receiver
-const receiver = new UPeer('receiver', { secretKey: 'file-key' });
-await receiver.start();
+const receiver = new Peer('receiver', { securityKey: 'file-key' });
+receiver.start();
 
-receiver.on('connection', (dataConn) => {
-  dataConn.on('data', (data) => {
+receiver.on('dataConnection', ({ conn }) => {
+  conn.on('data', (data) => {
     console.log('Received file:', data);
   });
 });
-```
-
-### Custom Transport (Advanced)
-
-```typescript
-import type { ISignalingTransport, SignalingMessage } from 'upeerjs';
-import { UPeer } from 'upeerjs';
-
-class WebSocketTransport implements ISignalingTransport {
-  private _ws: WebSocket | null = null;
-  private _handler: ((msg: SignalingMessage) => void) | null = null;
-
-  get connected() { return this._ws?.readyState === WebSocket.OPEN; }
-
-  async connect(peerId: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this._ws = new WebSocket(`wss://signal.example.com/${peerId}`);
-      this._ws.onopen = () => resolve();
-      this._ws.onerror = (e) => reject(e);
-      this._ws.onmessage = (e) => {
-        this._handler?.(JSON.parse(e.data));
-      };
-    });
-  }
-
-  async send(peerId: string, message: SignalingMessage): Promise<void> {
-    this._ws?.send(JSON.stringify({ to: peerId, ...message }));
-  }
-
-  onMessage(handler: (message: SignalingMessage) => void): void {
-    this._handler = handler;
-  }
-
-  disconnect(): void {
-    this._ws?.close();
-    this._ws = null;
-  }
-}
-
-// Advanced overload — custom transport replaces built-in MQTT
-const peer = new UPeer('my-id', { transport: new WebSocketTransport() });
 ```
 
 ### Integration with Vue (Application Layer Pattern)
@@ -993,13 +847,13 @@ const peer = new UPeer('my-id', { transport: new WebSocketTransport() });
 ```typescript
 // composables/usePeer.ts
 import { ref, onUnmounted } from 'vue';
-import { UPeer } from 'upeerjs';
+import { Peer } from 'upeerjs';
 
-export function usePeer(peerId: string, secretKey: string) {
+export function usePeer(peerId: string, securityKey: string) {
   const remoteStreams = ref<Map<string, MediaStream>>(new Map());
   const connected = ref(false);
 
-  const peer = new UPeer(peerId, { secretKey });
+  const peer = new Peer(peerId, { securityKey });
 
   peer.on('open', () => { connected.value = true; });
   peer.on('close', () => { connected.value = false; });
@@ -1025,15 +879,15 @@ export function usePeer(peerId: string, secretKey: string) {
 ```typescript
 // hooks/usePeer.ts
 import { useEffect, useRef, useState } from 'react';
-import { UPeer } from 'upeerjs';
+import { Peer } from 'upeerjs';
 
-export function usePeer(peerId: string, secretKey: string) {
-  const peerRef = useRef<UPeer | null>(null);
+export function usePeer(peerId: string, securityKey: string) {
+  const peerRef = useRef<Peer | null>(null);
   const [connected, setConnected] = useState(false);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
 
   useEffect(() => {
-    const peer = new UPeer(peerId, { secretKey });
+    const peer = new Peer(peerId, { securityKey });
 
     peer.on('open', () => setConnected(true));
     peer.on('close', () => setConnected(false));
@@ -1054,7 +908,7 @@ export function usePeer(peerId: string, secretKey: string) {
     peerRef.current = peer;
 
     return () => peer.destroy();
-  }, [peerId, secretKey]);
+  }, [peerId, securityKey]);
 
   return { peer: peerRef, connected, remoteStreams };
 }

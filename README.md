@@ -24,32 +24,37 @@ pnpm add upeerjs
 ### Video Call
 
 ```typescript
-import { UPeer } from 'upeerjs';
+import { Peer } from 'upeerjs';
 
-const peer = new UPeer('alice', { secretKey: 'shared-secret' });
-await peer.start();
+const peer = new Peer('alice', { securityKey: 'shared-secret' });
+peer.start();
 
 // Make a call
 const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-const call = peer.call('bob', stream);
-call.on('stream', (remote) => { video.srcObject = remote; });
+const session = peer.call('bob', stream);
+
+// Receive remote stream
+peer.on('stream', ({ peerId, stream: remote }) => {
+  video.srcObject = remote;
+});
 
 // Receive a call
-peer.on('call', (conn) => {
-  conn.answer(localStream);
-  conn.on('stream', (remote) => { video.srcObject = remote; });
+peer.on('call', ({ peerId, call }) => {
+  // call is an RtcSession — remote stream arrives via the 'stream' event on Peer
 });
 ```
 
 ### Data Only
 
 ```typescript
-const conn = peer.connect('bob');
-conn.on('open', () => conn.send({ hello: 'world' }));
+const session = peer.connect('bob');
 
-peer.on('connection', (conn) => {
+peer.on('dataConnection', ({ peerId, conn }) => {
   conn.on('data', (data) => console.log(data));
 });
+
+// Send data to a specific peer
+peer.send('bob', { hello: 'world' });
 ```
 
 ## Features
@@ -59,7 +64,7 @@ peer.on('connection', (conn) => {
 - **Streaming DataChannel** — Web Streams API with backpressure and 32KB chunking
 - **MessagePack** — Binary serialization, ~30% smaller than JSON
 - **Single Connection** — Media + DataChannel over one RTCPeerConnection
-- **Pluggable** — Swap transport (MQTT → WebSocket) or encryption (AES-GCM → custom)
+- **Pluggable** — Swap codec (JSON → custom) or encryption (AES-GCM → custom)
 - **TypeScript** — Full type safety with typed events
 
 ## Architecture
@@ -68,50 +73,78 @@ peer.on('connection', (conn) => {
 Application (RPC, state sync, business logic)
     │
     ▼
-UPeer (connection orchestrator)
-    ├── MediaConnection (WebRTC media)
-    ├── DataConnection (DataChannel + streaming)
+Peer (connection orchestrator)
     ├── RtcSession (RTCPeerConnection lifecycle)
+    ├── DataConnection (DataChannel + streaming)
     ├── SignalingBatcher (16ms debounce)
-    ├── ISignalingTransport ← MqttTransport
-    └── IEncryption ← AesGcmEncryption
+    ├── MqttTransport (MQTT-over-WebSocket signaling)
+    └── AesGcmEncryption (E2E encryption)
 ```
 
 ## API
 
-### `new UPeer(id?, options)`
+### `new Peer(id?, options)`
 
-Create a peer instance.
+Create a peer instance. Options:
 
-### `peer.call(remotePeerId, stream)` → `MediaConnection`
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `brokerUrl` | `string` | `'wss://broker.emqx.io:8084/mqtt'` | MQTT broker URL |
+| `mqttOptions` | `IClientOptions` | — | Additional MQTT client options |
+| `securityKey` | `string` | — | E2E encryption key (AES-GCM) |
+| `rtcConfig` | `RTCConfiguration` | Google STUN + Cloudflare STUN + PeerJS TURN | WebRTC configuration |
+| `codec` | `ICodec` | `JsonCodec` | Custom codec for signaling |
+| `encryption` | `IEncryption` | — | Custom encryption implementation |
+| `debug` | `boolean` | `false` | Enable debug logging |
 
-Call a remote peer with media.
+### `peer.start()`
 
-### `peer.connect(remotePeerId)` → `DataConnection`
+Connect to the MQTT signaling broker. Emits `'open'` when connected.
+
+### `peer.call(peerId, stream?)` → `RtcSession`
+
+Initiate a media + data call to a peer.
+
+### `peer.connect(peerId)` → `RtcSession`
 
 Open a data-only connection.
 
 ### `peer.send(peerId, data)`
 
-Send data to a specific peer.
+Send data to a specific peer via DataChannel.
 
 ### `peer.broadcast(data, options?)`
 
 Send data to all connected peers.
 
-### `peer.replaceTrack(peerId, kind, track)`
+### `peer.replaceTrack(peerId, stream)`
 
-Replace a media track without renegotiation.
+Replace media tracks for a specific peer (takes a full MediaStream).
+
+### `peer.setLocalStream(stream)`
+
+Set local stream and update all active sessions.
+
+### `peer.hangup(peerId)` / `peer.dataDisconnect(peerId)`
+
+Close a specific peer connection.
+
+### `peer.destroy()`
+
+Close all connections and signaling.
 
 ### Events
 
 | Event | Payload |
 |---|---|
 | `open` | `peerId: string` |
-| `call` | `MediaConnection` |
-| `connection` | `DataConnection` |
-| `stream` | `{ peerId, stream, call }` |
-| `data` | `{ peerId, data, conn }` |
+| `call` | `{ peerId, call: RtcSession }` |
+| `stream` | `{ peerId, stream: MediaStream, call: RtcSession }` |
+| `hangup` | `{ peerId, call: RtcSession }` |
+| `dataConnection` | `{ peerId, conn: DataConnection }` |
+| `data` | `{ peerId, data, conn: DataConnection }` |
+| `dataDisconnect` | `{ peerId, conn: DataConnection }` |
+| `iceConnectionStateChange` | `{ peerId, iceConnectionState, peerConnection }` |
 | `close` | — |
 | `error` | `Error` |
 
