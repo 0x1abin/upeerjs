@@ -1,6 +1,5 @@
 import { EventEmitter } from "eventemitter3";
 import mqtt from "mqtt";
-import { Buffer } from "buffer";
 import type { MqttClient, IClientOptions } from "mqtt";
 import type { ICodec, IEncryption, ISignalingTransport, SignalingMessage, TransportMessageHandler } from "../types";
 import { VERSION } from "../util/constants";
@@ -116,7 +115,7 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 	private _sendQueuedMessages(): void {
 		const queued = this._messagesQueue.splice(0);
 		for (const { topic, message } of queued) {
-			this._mqtt!.publish(topic, Buffer.from(message));
+			this._mqtt!.publish(topic, message as any);
 		}
 	}
 
@@ -136,7 +135,7 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 			}
 			return;
 		}
-		this._mqtt.publish(topic, Buffer.from(message));
+		this._mqtt.publish(topic, message as any);
 	}
 
 	disconnect(): void {
