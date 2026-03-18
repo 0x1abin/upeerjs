@@ -67,7 +67,6 @@ describe("MqttTransport", () => {
 			type: "offer",
 			data: { sdp: "test" },
 			src: "remote-peer",
-			ts: Date.now(),
 		};
 		const encoded = codec.encode(signalingMsg);
 		const buf = Buffer.from(encoded);
@@ -80,7 +79,6 @@ describe("MqttTransport", () => {
 			src: "remote-peer",
 			data: signalingMsg.data,
 		}));
-		expect(handler.mock.calls[0][0].ts).toEqual(expect.any(Number));
 	});
 
 	it("should ignore messages for other topics", () => {
@@ -90,7 +88,7 @@ describe("MqttTransport", () => {
 		transport.connect();
 		mockMqttClient.emit("connect");
 
-		const buf = Buffer.from(codec.encode({ type: "offer", src: "x", ts: Date.now(), data: {} }));
+		const buf = Buffer.from(codec.encode({ type: "offer", src: "x", data: {} }));
 		mockMqttClient.emit("message", "other-peer", buf);
 
 		expect(handler).not.toHaveBeenCalled();
@@ -116,7 +114,7 @@ describe("MqttTransport", () => {
 		transport.connect();
 		mockMqttClient.emit("connect");
 
-		const buf = Buffer.from(codec.encode({ src: "remote-peer", ts: Date.now(), data: {} }));
+		const buf = Buffer.from(codec.encode({ src: "remote-peer", data: {} }));
 		mockMqttClient.emit("message", "test-peer", buf);
 
 		expect(handler).not.toHaveBeenCalled();

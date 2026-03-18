@@ -6,18 +6,6 @@
 
 uPeerJS is a **generic, serverless peer-to-peer communication library** for the browser. It provides WebRTC connection management with MQTT-based signaling, end-to-end encryption, and raw DataChannel transport with backpressure — all without requiring a centralized server.
 
-### What uPeerJS Is Not
-
-uPeerJS is **not** an application framework. It does not include:
-
-- RPC or remote procedure calls
-- State synchronization
-- Device models or discovery
-- Cluster protocols
-- Business logic of any kind
-
-Application-level concerns (like uipcatjs) layer on top of uPeerJS.
-
 ### Comparison with PeerJS
 
 | | PeerJS | uPeerJS |
@@ -54,7 +42,7 @@ Application-level concerns (like uipcatjs) layer on top of uPeerJS.
 │ (RTCPeerConnection│  (Raw DataChannel   │
 │  + media tracks)  │   with backpressure)│
 ├───────────────────┴─────────────────────┤
-│ SignalingBatcher (signal batching)      │
+│ SignalingBatcher (signal pass-through)  │
 ├─────────────────────────────────────────┤
 │ ISignalingTransport ←── MqttTransport   │
 │                    ←── (custom)         │
@@ -71,7 +59,7 @@ Application-level concerns (like uipcatjs) layer on top of uPeerJS.
 | **Peer** | Entry point. Creates/manages sessions, data connections, routes signaling messages, emits typed events. Extends EventEmitter3. |
 | **RtcSession** | Manages a single RTCPeerConnection lifecycle: offer/answer creation, ICE candidate handling, track management, DataChannel creation. One per remote peer. Emits `stream`, `iceStateChanged`, `close`, `signaling`, `dataChannel` events. |
 | **DataConnection** | Thin wrapper around RTCDataChannel with backpressure. Sends and receives raw `Uint8Array` / `ArrayBuffer` — no framing or serialization. |
-| **SignalingBatcher** | Batches signaling items (SDP, ICE candidates) with 16ms debounce to reduce MQTT messages. |
+| **SignalingBatcher** | Thin pass-through that forwards each signaling message (Offer, Answer, Candidate) immediately. Preserves the interface for future batching if needed. |
 | **MqttTransport** | Default `ISignalingTransport` implementation. Publishes/subscribes to MQTT topics for signaling and broadcast. Extends EventEmitter3, emits `open`, `close`, `error`, `disconnected`. |
 | **AesGcmEncryption** | Default `IEncryption` implementation using Web Crypto AES-GCM. |
 
@@ -94,7 +82,7 @@ upeerjs/
 │   │
 │   ├── connection/
 │   │   ├── rtc-session.ts        # RTCPeerConnection lifecycle
-│   │   └── signaling-batcher.ts  # Signal batching/debounce
+│   │   └── signaling-batcher.ts  # Signal pass-through (no batching)
 │   │
 │   ├── data/
 │   │   └── data-connection.ts    # Raw DataChannel wrapper with backpressure
@@ -231,7 +219,6 @@ enum SignalingType {
   Candidate = 'candidate',
   Offer = 'offer',
   Answer = 'answer',
-  Leave = 'leave',
 }
 
 interface SignalingMessage {
@@ -244,8 +231,6 @@ interface SignalingMessage {
   /** Source peer ID */
   src: string;
 
-  /** Sender timestamp (Date.now()) */
-  ts: number;
 }
 ```
 
@@ -349,53 +334,32 @@ Each signaling message is a flat object with `type` directly on the message. One
 // Wire format (Codec.encode → encrypt → MQTT publish)
 
 // Offer
-{ type: "offer", data: { sdp: RTCSessionDescriptionInit, config?: RTCConfiguration, protocol?: ProtocolMeta }, src: "sender-peer-id", ts: 1710000000000 }
+{ type: "offer", data: { sdp: RTCSessionDescriptionInit, config?: RTCConfiguration, protocol?: ProtocolMeta }, src: "sender-peer-id" }
 
 // Answer
-{ type: "answer", data: { sdp: RTCSessionDescriptionInit, protocol?: ProtocolMeta }, src: "sender-peer-id", ts: 1710000000000 }
+{ type: "answer", data: { sdp: RTCSessionDescriptionInit, protocol?: ProtocolMeta }, src: "sender-peer-id" }
 
-// Candidate (batched — data is an array of candidate payloads)
-{ type: "candidate", data: [{ candidate: RTCIceCandidateInit }, ...], src: "sender-peer-id", ts: 1710000000000 }
-
-// Leave
-{ type: "leave", data: undefined, src: "sender-peer-id", ts: 1710000000000 }
+// Candidate (sent individually, same encoding as Offer/Answer)
+{ type: "candidate", data: { candidate: RTCIceCandidateInit }, src: "sender-peer-id" }
 ```
 
 The dispatch validation on the receiving side uses a structural check (`msg?.type && msg?.src`) to identify valid signaling messages.
 
-### Signal Batching
+### Signal Pass-Through
 
-ICE candidates arrive in rapid succession. Sending each as a separate MQTT message wastes bandwidth. The `SignalingBatcher` coalesces candidates only — Offer/Answer/Leave are always sent immediately:
-
-- **Debounce window:** 16ms (one frame) — candidates only
-- **Flush threshold:** 10 candidates — flush immediately if exceeded
-- **Immediate flush:** Offer, Answer, and Leave flush any pending candidates first, then emit immediately
+Each signaling message (Offer, Answer, Candidate) is sent individually as a single MQTT message. The `SignalingBatcher` is a thin pass-through that forwards every `push()` call to the flush callback immediately — no queuing, debouncing, or array wrapping:
 
 ```typescript
 class SignalingBatcher {
-  private _candidateQueue: any[] = [];
-  private _timer: ReturnType<typeof setTimeout> | null = null;
-  private _delay: number;
-  private _flushThreshold: number;
   private _onFlush: (type: SignalingType, data: any) => void;
 
-  constructor(
-    onFlush: (type: SignalingType, data: any) => void,
-    delay: number = 16,
-    flushThreshold: number = 10,
-  ) { ... }
+  constructor(onFlush: (type: SignalingType, data: any) => void) { ... }
 
   push(type: SignalingType, payload: any): void {
-    if (type === SignalingType.Candidate) {
-      // Accumulate and debounce
-    } else {
-      this._flushCandidates(); // flush pending candidates first
-      this._onFlush(type, payload);
-    }
+    this._onFlush(type, payload);
   }
 
-  private _flushCandidates(): void { ... }
-  destroy(): void { ... }
+  destroy(): void {}
 }
 ```
 
@@ -423,11 +387,9 @@ MQTT message arrives on peer's topic
        │                   → Create RtcSession (answerer)
        │                   → emit('call')
        │
-       ├─ 'candidate' → Unwrap data[] array, call session.handleSignaling
-       │                   for each candidate payload
-       │
        └─ other        → session.handleSignaling(type, data)
-                            └─ 'answer' → setRemoteDescription(sdp)
+                            ├─ 'candidate' → addIceCandidate(candidate)
+                            └─ 'answer'    → setRemoteDescription(sdp)
 ```
 
 ---
@@ -494,7 +456,7 @@ Both modes use the same `RtcSession` — the only difference is whether tracks a
        │                                │                                │
        │──── candidate ────────────────►│────────────────────────────────►│ (7)
        │◄─── candidate ────────────────│◄────────────────────────────────│
-       │         (ICE candidates exchange, batchable)                    │
+       │         (ICE candidates exchange, sent individually)                    │
        │                                │                                │
        │═══════════ WebRTC P2P connection established (DTLS handshake) ══│
        │                                                                 │
@@ -1041,7 +1003,7 @@ This table maps existing uIPCat composables to uPeerJS components:
 
 2. **MediaConnection + Negotiator → RtcSession**: The current split between `MediaConnection` (state) and `Negotiator` (RTCPeerConnection management) is merged into `RtcSession` which owns the full connection lifecycle. There is no separate `MediaConnection` class — `RtcSession` handles media tracks, DataChannel, and signaling.
 
-3. **Signal batching extracted**: The current signal queue in `MediaConnection` becomes a standalone `SignalingBatcher` that can be reused and tested independently.
+3. **Signal pass-through extracted**: The current signal queue in `MediaConnection` becomes a standalone `SignalingBatcher` pass-through that preserves the interface for future batching if needed.
 
 4. **PeerClient → Peer**: The old `notify()` and `watch()` (unencrypted MQTT pub/sub) are replaced with generic, encrypted `publish()` / `subscribe()` methods that share the signaling encryption pipeline. Application-level routing is done via a `topic` field inside the encrypted message body.
 
@@ -1188,7 +1150,6 @@ export function usePeer(peerId: string, securityKey: string) {
 | `Candidate` | `"candidate"` | ICE Candidate |
 | `Offer` | `"offer"` | SDP Offer |
 | `Answer` | `"answer"` | SDP Answer |
-| `Leave` | `"leave"` | Peer leaving (disconnect notification) |
 
 ### Protocol Constants
 
@@ -1220,7 +1181,7 @@ export function usePeer(peerId: string, securityKey: string) {
 |------|---------------|
 | `src/peer.ts` | Peer orchestrator: connection state machine, heartbeat, signaling dispatch |
 | `src/connection/rtc-session.ts` | RTCPeerConnection lifecycle: offer/answer, ICE, DataChannel creation |
-| `src/connection/signaling-batcher.ts` | Signal batching with 16ms debounce |
+| `src/connection/signaling-batcher.ts` | Signal pass-through (no batching) |
 | `src/data/data-connection.ts` | Raw DataChannel wrapper with backpressure |
 | `src/transport/mqtt-transport.ts` | MQTT-over-WebSocket signaling transport |
 | `src/security/aes-gcm-encryption.ts` | AES-GCM encryption with direct key import and replay protection |

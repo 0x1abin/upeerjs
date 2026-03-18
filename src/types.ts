@@ -6,14 +6,12 @@ export enum SignalingType {
 	Candidate = "candidate",
 	Offer = "offer",
 	Answer = "answer",
-	Leave = "leave",
 }
 
 export interface SignalingMessage {
 	type: SignalingType;
 	data: any;
 	src: string;
-	ts: number;
 }
 
 // ── Codec ──

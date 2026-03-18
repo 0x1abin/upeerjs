@@ -25,7 +25,7 @@ The library is a layered stack where `Peer` orchestrates everything:
 
 - **Peer** (`src/peer.ts`) — Top-level API. Manages sessions, data connections, and signaling transport. Extends EventEmitter3. Constructor accepts either `(options)` or `(peerId, options)`.
 - **RtcSession** (`src/connection/rtc-session.ts`) — Wraps a single `RTCPeerConnection` lifecycle (offer/answer, ICE, media tracks, DataChannel creation). One per remote peer.
-- **SignalingBatcher** (`src/connection/signaling-batcher.ts`) — Batches ICE candidates with 16ms debounce; Offer/Answer/Leave flush immediately as per-type messages.
+- **SignalingBatcher** (`src/connection/signaling-batcher.ts`) — Thin pass-through that forwards each signaling message immediately. No batching or debouncing.
 - **DataConnection** (`src/data/data-connection.ts`) — Thin wrapper around `RTCDataChannel` with backpressure. Sends/receives raw `Uint8Array` — no framing or serialization.
 - **MqttTransport** (`src/transport/mqtt-transport.ts`) — Default `ISignalingTransport` implementation. Publishes/subscribes to MQTT topics for peer-to-peer signaling and encrypted broadcast (`{nodeId}:ff`). Extends EventEmitter3.
 - **AesGcmEncryption** (`src/security/aes-gcm-encryption.ts`) — Default `IEncryption` implementation using Web Crypto AES-GCM.

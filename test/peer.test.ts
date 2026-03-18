@@ -250,7 +250,6 @@ describe("Peer", () => {
 				type: "offer",
 				data: { sdp: { type: "offer", sdp: "remote-sdp" } },
 				src: "remote-peer",
-				ts: Date.now(),
 			};
 			// Default codec is now MsgpackCodec, encode with msgpack
 			const encoded = msgpackEncode(signalingMsg);

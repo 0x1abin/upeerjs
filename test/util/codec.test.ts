@@ -55,7 +55,6 @@ describe("JsonCodec", () => {
 			type: "offer",
 			data: { sdp: { type: "offer", sdp: "v=0..." } },
 			src: "peer-abc123",
-			ts: Date.now(),
 		};
 		const encoded = codec.encode(signalingMsg);
 		const decoded = codec.decode(encoded);
@@ -93,7 +92,6 @@ describe("MsgpackCodec", () => {
 			type: "offer",
 			data: { sdp: { type: "offer", sdp: "v=0..." } },
 			src: "peer-abc123",
-			ts: Date.now(),
 		};
 		const msgpackSize = codec.encode(data).length;
 		const jsonSize = jsonCodec.encode(data).length;

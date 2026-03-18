@@ -567,7 +567,6 @@ export class Peer extends EventEmitter {
 			type,
 			data,
 			src: this.peerId,
-			ts: Date.now(),
 		});
 		this._transport.send(peerId, encoded);
 	}

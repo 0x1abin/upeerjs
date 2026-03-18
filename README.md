@@ -76,7 +76,7 @@ Application (RPC, state sync, business logic)
 Peer (connection orchestrator)
     ├── RtcSession (RTCPeerConnection lifecycle)
     ├── DataConnection (DataChannel + streaming)
-    ├── SignalingBatcher (16ms debounce)
+    ├── SignalingBatcher (signal pass-through)
     ├── MqttTransport (MQTT-over-WebSocket signaling)
     └── AesGcmEncryption (E2E encryption)
 ```

@@ -33,16 +33,6 @@ describe("SignalingBatcher", () => {
 		expect(onFlush).toHaveBeenCalledWith(SignalingType.Answer, { sdp: "answer-sdp" });
 	});
 
-	it("should pass leave through immediately", () => {
-		const onFlush = vi.fn();
-		const batcher = new SignalingBatcher(onFlush);
-
-		batcher.push(SignalingType.Leave, {});
-
-		expect(onFlush).toHaveBeenCalledTimes(1);
-		expect(onFlush).toHaveBeenCalledWith(SignalingType.Leave, {});
-	});
-
 	it("should pass multiple candidates through individually", () => {
 		const onFlush = vi.fn();
 		const batcher = new SignalingBatcher(onFlush);
