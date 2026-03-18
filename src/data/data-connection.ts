@@ -16,7 +16,11 @@ export class DataConnection extends EventEmitter {
 		this.dataChannel.binaryType = "arraybuffer";
 		this.dataChannel.bufferedAmountLowThreshold = DataConnection.MAX_BUFFERED_AMOUNT / 2;
 
-		this.dataChannel.addEventListener("open", () => this.emit("open"));
+		if (this.dataChannel.readyState === "open") {
+			queueMicrotask(() => this.emit("open"));
+		} else {
+			this.dataChannel.addEventListener("open", () => this.emit("open"));
+		}
 		this.dataChannel.addEventListener("close", () => {
 			if (!this._closed) this.close();
 		});
