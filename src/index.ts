@@ -1,5 +1,5 @@
 // Main
-export { Peer } from "./peer";
+export { Peer, ConnectionState } from "./peer";
 
 // Types
 export { SignalingType } from "./types";
@@ -12,7 +12,6 @@ export type {
 	IEncryption,
 	ISignalingTransport,
 	SignalingMessage,
-	SignalingItem,
 	TransportMessageHandler,
 } from "./types";
 
@@ -21,6 +20,7 @@ export { MqttTransport } from "./transport/mqtt-transport";
 
 // Security
 export { AesGcmEncryption } from "./security/aes-gcm-encryption";
+export type { AesGcmEncryptionOptions } from "./security/aes-gcm-encryption";
 
 // Connection
 export { RtcSession } from "./connection/rtc-session";
@@ -30,5 +30,5 @@ export { SignalingBatcher } from "./connection/signaling-batcher";
 export { DataConnection } from "./data/data-connection";
 
 // Utilities
-export { JsonCodec } from "./util/codec";
+export { JsonCodec, MsgpackCodec } from "./util/codec";
 export { generatePeerId } from "./util/id-generator";

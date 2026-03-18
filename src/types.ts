@@ -9,15 +9,11 @@ export enum SignalingType {
 	Leave = "leave",
 }
 
-export interface SignalingItem {
-	type: SignalingType;
-	payload: any;
-}
-
 export interface SignalingMessage {
-	type: "signaling";
+	type: SignalingType;
+	data: any;
 	src: string;
-	data: SignalingItem[];
+	ts: number;
 }
 
 // ── Codec ──
@@ -59,10 +55,14 @@ export interface PeerOptions {
 	securityKey?: string;
 	/** WebRTC configuration (ICE servers, etc.) */
 	rtcConfig?: RTCConfiguration;
-	/** Custom codec for signaling messages (default: JSON) */
+	/** Custom codec for signaling messages (default: MessagePack) */
 	codec?: ICodec;
 	/** Custom encryption implementation */
 	encryption?: IEncryption;
+	/** DataChannel label (default: "dc:upeer") */
+	dataChannelLabel?: string;
+	/** DataChannel configuration (default: { ordered: true }) */
+	dataChannelInit?: RTCDataChannelInit;
 	/** Enable debug logging */
 	debug?: boolean;
 }

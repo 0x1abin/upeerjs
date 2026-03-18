@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { EventEmitter } from "eventemitter3";
 import { DataConnection } from "../../src/data/data-connection";
 
 class MockDataChannel extends EventTarget {
@@ -79,6 +78,28 @@ describe("DataConnection", () => {
 		const dc = new DataConnection(mockDC as any);
 		dc.close();
 		// Should not throw, just resolve
-		await dc.send({ test: true });
+		await dc.send(new Uint8Array([1, 2, 3]));
+	});
+
+	it("should emit raw Uint8Array on message", () => {
+		const dc = new DataConnection(mockDC as any);
+		const dataHandler = vi.fn();
+		dc.on("data", dataHandler);
+
+		const testData = new Uint8Array([1, 2, 3, 4]).buffer;
+		mockDC.dispatchEvent(Object.assign(new Event("message"), { data: testData }));
+
+		expect(dataHandler).toHaveBeenCalledTimes(1);
+		const received = dataHandler.mock.calls[0][0];
+		expect(received).toBeInstanceOf(Uint8Array);
+		expect(Array.from(received)).toEqual([1, 2, 3, 4]);
+	});
+
+	it("should send raw Uint8Array", async () => {
+		const dc = new DataConnection(mockDC as any);
+		mockDC.readyState = "open";
+
+		await dc.send(new Uint8Array([5, 6, 7]));
+		expect(mockDC.send).toHaveBeenCalledTimes(1);
 	});
 });

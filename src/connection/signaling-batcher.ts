@@ -1,14 +1,14 @@
-import type { SignalingItem, SignalingType } from "../types";
+import { SignalingType } from "../types";
 
 export class SignalingBatcher {
-	private _queue: SignalingItem[] = [];
+	private _candidateQueue: any[] = [];
 	private _timer: ReturnType<typeof setTimeout> | null = null;
 	private _delay: number;
 	private _flushThreshold: number;
-	private _onFlush: (items: SignalingItem[]) => void;
+	private _onFlush: (type: SignalingType, data: any) => void;
 
 	constructor(
-		onFlush: (items: SignalingItem[]) => void,
+		onFlush: (type: SignalingType, data: any) => void,
 		delay: number = 16,
 		flushThreshold: number = 10,
 	) {
@@ -17,26 +17,30 @@ export class SignalingBatcher {
 		this._flushThreshold = flushThreshold;
 	}
 
-	push(type: SignalingType, payload: any, immediate?: boolean): void {
-		this._queue.push({ type, payload });
-
-		if (immediate || this._queue.length > this._flushThreshold) {
-			this._flush();
+	push(type: SignalingType, payload: any): void {
+		if (type === SignalingType.Candidate) {
+			this._candidateQueue.push(payload);
+			if (this._candidateQueue.length > this._flushThreshold) {
+				this._flushCandidates();
+			} else {
+				if (this._timer) clearTimeout(this._timer);
+				this._timer = setTimeout(() => this._flushCandidates(), this._delay);
+			}
 		} else {
-			if (this._timer) clearTimeout(this._timer);
-			this._timer = setTimeout(() => this._flush(), this._delay);
+			this._flushCandidates(); // flush pending candidates first
+			this._onFlush(type, payload);
 		}
 	}
 
-	private _flush(): void {
+	private _flushCandidates(): void {
 		if (this._timer) {
 			clearTimeout(this._timer);
 			this._timer = null;
 		}
-		if (this._queue.length === 0) return;
-		const items = this._queue;
-		this._queue = [];
-		this._onFlush(items);
+		if (this._candidateQueue.length === 0) return;
+		const candidates = this._candidateQueue;
+		this._candidateQueue = [];
+		this._onFlush(SignalingType.Candidate, candidates);
 	}
 
 	destroy(): void {
@@ -44,6 +48,6 @@ export class SignalingBatcher {
 			clearTimeout(this._timer);
 			this._timer = null;
 		}
-		this._queue = [];
+		this._candidateQueue = [];
 	}
 }

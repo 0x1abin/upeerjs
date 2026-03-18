@@ -11,7 +11,7 @@ describe("SignalingBatcher", () => {
 		vi.useRealTimers();
 	});
 
-	it("should batch messages and flush after delay", () => {
+	it("should batch candidates and flush after delay", () => {
 		const onFlush = vi.fn();
 		const batcher = new SignalingBatcher(onFlush, 16);
 
@@ -23,25 +23,43 @@ describe("SignalingBatcher", () => {
 		vi.advanceTimersByTime(16);
 
 		expect(onFlush).toHaveBeenCalledTimes(1);
-		expect(onFlush).toHaveBeenCalledWith([
-			{ type: SignalingType.Candidate, payload: { candidate: "c1" } },
-			{ type: SignalingType.Candidate, payload: { candidate: "c2" } },
+		expect(onFlush).toHaveBeenCalledWith(SignalingType.Candidate, [
+			{ candidate: "c1" },
+			{ candidate: "c2" },
 		]);
 	});
 
-	it("should flush immediately when immediate=true", () => {
+	it("should flush offer immediately", () => {
 		const onFlush = vi.fn();
 		const batcher = new SignalingBatcher(onFlush);
 
-		batcher.push(SignalingType.Offer, { sdp: "offer-sdp" }, true);
+		batcher.push(SignalingType.Offer, { sdp: "offer-sdp" });
 
 		expect(onFlush).toHaveBeenCalledTimes(1);
-		expect(onFlush).toHaveBeenCalledWith([
-			{ type: SignalingType.Offer, payload: { sdp: "offer-sdp" } },
-		]);
+		expect(onFlush).toHaveBeenCalledWith(SignalingType.Offer, { sdp: "offer-sdp" });
 	});
 
-	it("should flush when queue exceeds threshold", () => {
+	it("should flush answer immediately", () => {
+		const onFlush = vi.fn();
+		const batcher = new SignalingBatcher(onFlush);
+
+		batcher.push(SignalingType.Answer, { sdp: "answer-sdp" });
+
+		expect(onFlush).toHaveBeenCalledTimes(1);
+		expect(onFlush).toHaveBeenCalledWith(SignalingType.Answer, { sdp: "answer-sdp" });
+	});
+
+	it("should flush leave immediately", () => {
+		const onFlush = vi.fn();
+		const batcher = new SignalingBatcher(onFlush);
+
+		batcher.push(SignalingType.Leave, {});
+
+		expect(onFlush).toHaveBeenCalledTimes(1);
+		expect(onFlush).toHaveBeenCalledWith(SignalingType.Leave, {});
+	});
+
+	it("should flush candidates when queue exceeds threshold", () => {
 		const onFlush = vi.fn();
 		const batcher = new SignalingBatcher(onFlush, 16, 3); // threshold=3
 
@@ -56,10 +74,12 @@ describe("SignalingBatcher", () => {
 
 		// 4 items > threshold=3, should auto-flush
 		expect(onFlush).toHaveBeenCalledTimes(1);
-		expect(onFlush.mock.calls[0][0]).toHaveLength(4);
+		expect(onFlush).toHaveBeenCalledWith(SignalingType.Candidate, [
+			{ n: 1 }, { n: 2 }, { n: 3 }, { n: 4 },
+		]);
 	});
 
-	it("should reset timer on subsequent pushes (debounce)", () => {
+	it("should reset timer on subsequent candidate pushes (debounce)", () => {
 		const onFlush = vi.fn();
 		const batcher = new SignalingBatcher(onFlush, 50);
 
@@ -74,10 +94,12 @@ describe("SignalingBatcher", () => {
 
 		vi.advanceTimersByTime(20);
 		expect(onFlush).toHaveBeenCalledTimes(1);
-		expect(onFlush.mock.calls[0][0]).toHaveLength(2);
+		expect(onFlush).toHaveBeenCalledWith(SignalingType.Candidate, [
+			{ n: 1 }, { n: 2 },
+		]);
 	});
 
-	it("should not flush empty queue", () => {
+	it("should not flush empty candidate queue", () => {
 		const onFlush = vi.fn();
 		new SignalingBatcher(onFlush, 16);
 		vi.advanceTimersByTime(100);
@@ -95,17 +117,20 @@ describe("SignalingBatcher", () => {
 		expect(onFlush).not.toHaveBeenCalled();
 	});
 
-	it("should include immediate items with batched ones", () => {
+	it("should flush pending candidates before non-candidate type", () => {
 		const onFlush = vi.fn();
 		const batcher = new SignalingBatcher(onFlush, 16);
 
 		batcher.push(SignalingType.Candidate, { n: 1 });
-		batcher.push(SignalingType.Offer, { sdp: "test" }, true);
+		batcher.push(SignalingType.Offer, { sdp: "test" });
 
-		expect(onFlush).toHaveBeenCalledTimes(1);
-		expect(onFlush.mock.calls[0][0]).toHaveLength(2);
-		expect(onFlush.mock.calls[0][0][0].type).toBe(SignalingType.Candidate);
-		expect(onFlush.mock.calls[0][0][1].type).toBe(SignalingType.Offer);
+		expect(onFlush).toHaveBeenCalledTimes(2);
+		// First call: flush pending candidates
+		expect(onFlush.mock.calls[0][0]).toBe(SignalingType.Candidate);
+		expect(onFlush.mock.calls[0][1]).toEqual([{ n: 1 }]);
+		// Second call: the offer itself
+		expect(onFlush.mock.calls[1][0]).toBe(SignalingType.Offer);
+		expect(onFlush.mock.calls[1][1]).toEqual({ sdp: "test" });
 	});
 
 	it("should handle multiple flush cycles", () => {
@@ -117,10 +142,7 @@ describe("SignalingBatcher", () => {
 		expect(onFlush).toHaveBeenCalledTimes(1);
 
 		batcher.push(SignalingType.Answer, { sdp: "answer" });
-		vi.advanceTimersByTime(16);
 		expect(onFlush).toHaveBeenCalledTimes(2);
-		expect(onFlush.mock.calls[1][0]).toEqual([
-			{ type: SignalingType.Answer, payload: { sdp: "answer" } },
-		]);
+		expect(onFlush.mock.calls[1]).toEqual([SignalingType.Answer, { sdp: "answer" }]);
 	});
 });

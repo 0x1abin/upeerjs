@@ -1,12 +1,13 @@
 import { EventEmitter } from "eventemitter3";
 import { SignalingBatcher } from "./signaling-batcher";
 import { SignalingType } from "../types";
-import type { SignalingItem } from "../types";
 
 export interface RtcSessionOptions {
 	rtcConfig?: RTCConfiguration;
 	constraints?: RTCOfferOptions;
 	sdpTransform?: (sdp: string) => string;
+	dataChannelLabel?: string;
+	dataChannelInit?: RTCDataChannelInit;
 	debug?: boolean;
 }
 
@@ -14,25 +15,31 @@ export interface RtcSessionEvents {
 	stream: (stream: MediaStream) => void;
 	iceStateChanged: (state: RTCIceConnectionState) => void;
 	close: () => void;
-	signaling: (items: SignalingItem[]) => void;
+	signaling: (type: SignalingType, data: any) => void;
 }
 
 export class RtcSession extends EventEmitter {
 	readonly peerId: string;
 	peerConnection: RTCPeerConnection | null = null;
 	dataChannel: RTCDataChannel | null = null;
+	controlChannel: RTCDataChannel | null = null;
+	bulkChannel: RTCDataChannel | null = null;
 
 	private _batcher: SignalingBatcher;
 	private _options: RtcSessionOptions;
+	private _dataChannelLabel: string;
+	private _dataChannelInit: RTCDataChannelInit;
 	private _debug: boolean;
 
 	constructor(peerId: string, options: RtcSessionOptions = {}) {
 		super();
 		this.peerId = peerId;
 		this._options = options;
+		this._dataChannelLabel = options.dataChannelLabel ?? "dc:upeer";
+		this._dataChannelInit = options.dataChannelInit ?? { ordered: true };
 		this._debug = options.debug ?? false;
 		this._batcher = new SignalingBatcher(
-			(items) => this.emit("signaling", items),
+			(type, data) => this.emit("signaling", type, data),
 		);
 	}
 
@@ -51,8 +58,7 @@ export class RtcSession extends EventEmitter {
 			if (!hasVideo) pc.addTransceiver("video", { direction: "recvonly" });
 		}
 
-		const dcConfig: RTCDataChannelInit = { ordered: true };
-		this.dataChannel = pc.createDataChannel("dc:upeer", dcConfig);
+		this.dataChannel = pc.createDataChannel(this._dataChannelLabel, this._dataChannelInit);
 
 		void this._makeOffer();
 	}
@@ -79,6 +85,13 @@ export class RtcSession extends EventEmitter {
 		}
 	}
 
+	/** Trigger ICE restart to recover from network changes */
+	iceRestart(): void {
+		if (!this.peerConnection) return;
+		if (this._debug) console.warn(`[upeer] ICE restart for ${this.peerId}`);
+		void this._makeOffer(true);
+	}
+
 	replaceTrack(stream: MediaStream): void {
 		if (!this.peerConnection) return;
 		const senders = this.peerConnection.getSenders();
@@ -92,6 +105,14 @@ export class RtcSession extends EventEmitter {
 
 	close(): void {
 		this._batcher.destroy();
+
+		if (this.controlChannel && this.controlChannel.readyState !== "closed") {
+			this.controlChannel.close();
+		}
+
+		if (this.bulkChannel && this.bulkChannel.readyState !== "closed") {
+			this.bulkChannel.close();
+		}
 
 		if (this.dataChannel && this.dataChannel.readyState !== "closed") {
 			this.dataChannel.close();
@@ -108,6 +129,8 @@ export class RtcSession extends EventEmitter {
 
 		this.peerConnection = null;
 		this.dataChannel = null;
+		this.controlChannel = null;
+		this.bulkChannel = null;
 		this.emit("close");
 	}
 
@@ -116,6 +139,13 @@ export class RtcSession extends EventEmitter {
 	private _createPeerConnection(): RTCPeerConnection {
 		const pc = new RTCPeerConnection(this._options.rtcConfig);
 		this.peerConnection = pc;
+
+		// Negotiated control channel — both sides create independently, no SDP overhead
+		this.controlChannel = pc.createDataChannel("_ctrl", { negotiated: true, id: 0, ordered: true });
+
+		// Negotiated bulk data channel — for large binary transfers (images, videos)
+		this.bulkChannel = pc.createDataChannel("dc:bulk", { negotiated: true, id: 1, ordered: true });
+
 		this._setupListeners(pc);
 		return pc;
 	}
@@ -153,17 +183,21 @@ export class RtcSession extends EventEmitter {
 		};
 
 		pc.ondatachannel = (evt) => {
-			if (evt.channel.label === "dc:upeer") {
+			if (evt.channel.label === this._dataChannelLabel) {
 				this.dataChannel = evt.channel;
 				this.emit("dataChannel", evt.channel);
 			}
 		};
 	}
 
-	private async _makeOffer(): Promise<void> {
+	private async _makeOffer(iceRestart?: boolean): Promise<void> {
 		const pc = this.peerConnection!;
 		try {
-			const offer = await pc.createOffer(this._options.constraints);
+			const offerOptions = {
+				...this._options.constraints,
+				...(iceRestart ? { iceRestart: true } : {}),
+			};
+			const offer = await pc.createOffer(offerOptions);
 			await pc.setLocalDescription(offer);
 
 			this._batcher.push(
@@ -172,7 +206,6 @@ export class RtcSession extends EventEmitter {
 					sdp: JSON.parse(JSON.stringify(offer)),
 					config: this._options.rtcConfig,
 				},
-				true,
 			);
 		} catch (err: any) {
 			if (err?.toString?.().includes("kHaveRemoteOffer")) return;
@@ -188,8 +221,9 @@ export class RtcSession extends EventEmitter {
 
 			this._batcher.push(
 				SignalingType.Answer,
-				{ sdp: JSON.parse(JSON.stringify(answer)) },
-				true,
+				{
+					sdp: JSON.parse(JSON.stringify(answer)),
+				},
 			);
 		} catch (err) {
 			console.error("[upeer] Failed to create/set answer:", err);

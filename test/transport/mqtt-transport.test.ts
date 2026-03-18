@@ -64,9 +64,10 @@ describe("MqttTransport", () => {
 		mockMqttClient.emit("connect");
 
 		const signalingMsg = {
-			type: "signaling",
+			type: "offer",
+			data: { sdp: "test" },
 			src: "remote-peer",
-			data: [{ type: "offer", payload: { sdp: "test" } }],
+			ts: Date.now(),
 		};
 		const encoded = codec.encode(signalingMsg);
 		const buf = Buffer.from(encoded);
@@ -74,7 +75,12 @@ describe("MqttTransport", () => {
 		mockMqttClient.emit("message", "test-peer", buf);
 
 		expect(handler).toHaveBeenCalledTimes(1);
-		expect(handler.mock.calls[0][0]).toEqual(signalingMsg);
+		expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+			type: "offer",
+			src: "remote-peer",
+			data: signalingMsg.data,
+		}));
+		expect(handler.mock.calls[0][0].ts).toEqual(expect.any(Number));
 	});
 
 	it("should ignore messages for other topics", () => {
@@ -84,8 +90,34 @@ describe("MqttTransport", () => {
 		transport.connect();
 		mockMqttClient.emit("connect");
 
-		const buf = Buffer.from(codec.encode({ type: "signaling", src: "x", data: [] }));
+		const buf = Buffer.from(codec.encode({ type: "offer", src: "x", ts: Date.now(), data: {} }));
 		mockMqttClient.emit("message", "other-peer", buf);
+
+		expect(handler).not.toHaveBeenCalled();
+	});
+
+	it("should ignore messages without src field", () => {
+		const handler = vi.fn();
+		transport.onMessage(handler);
+
+		transport.connect();
+		mockMqttClient.emit("connect");
+
+		const buf = Buffer.from(codec.encode({ type: "offer", data: { sdp: "test" } }));
+		mockMqttClient.emit("message", "test-peer", buf);
+
+		expect(handler).not.toHaveBeenCalled();
+	});
+
+	it("should ignore messages without type field", () => {
+		const handler = vi.fn();
+		transport.onMessage(handler);
+
+		transport.connect();
+		mockMqttClient.emit("connect");
+
+		const buf = Buffer.from(codec.encode({ src: "remote-peer", ts: Date.now(), data: {} }));
+		mockMqttClient.emit("message", "test-peer", buf);
 
 		expect(handler).not.toHaveBeenCalled();
 	});

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "eventemitter3";
+import { encode as msgpackEncode } from "@msgpack/msgpack";
 
 // Mock mqtt before importing Peer
 const mockMqttClient = new EventEmitter() as any;
@@ -31,17 +32,18 @@ function createMockPC() {
 		getSenders: vi.fn(() => []),
 		getTransceivers: vi.fn(() => []),
 		addTransceiver: vi.fn(),
-		createDataChannel: vi.fn(() => ({
-			label: "dc:upeer",
+		createDataChannel: vi.fn((label: string, init?: any) => ({
+			label,
 			readyState: "connecting",
 			close: vi.fn(),
 			binaryType: "",
 			bufferedAmount: 0,
 			bufferedAmountLowThreshold: 0,
-			id: 1,
+			id: init?.id ?? 1,
 			send: vi.fn(),
 			addEventListener: vi.fn(),
 			removeEventListener: vi.fn(),
+			onmessage: null,
 		})),
 		close: vi.fn(),
 	};
@@ -245,16 +247,13 @@ describe("Peer", () => {
 
 			// Simulate incoming signaling message
 			const signalingMsg = {
-				type: "signaling",
+				type: "offer",
+				data: { sdp: { type: "offer", sdp: "remote-sdp" } },
 				src: "remote-peer",
-				data: [
-					{
-						type: "offer",
-						payload: { sdp: { type: "offer", sdp: "remote-sdp" } },
-					},
-				],
+				ts: Date.now(),
 			};
-			const encoded = new TextEncoder().encode(JSON.stringify(signalingMsg));
+			// Default codec is now MsgpackCodec, encode with msgpack
+			const encoded = msgpackEncode(signalingMsg);
 			const buf = Buffer.from(encoded);
 
 			mockMqttClient.emit("message", "test-peer", buf);
@@ -293,12 +292,12 @@ describe("Peer", () => {
 	describe("broadcast and send", () => {
 		it("should not throw when sending to unknown peer", () => {
 			const peer = new Peer("test-peer", { brokerUrl: "wss://test.com/mqtt" });
-			expect(() => peer.send("unknown", { data: true })).not.toThrow();
+			expect(() => peer.send("unknown", new Uint8Array([1, 2, 3]))).not.toThrow();
 		});
 
 		it("should not throw when broadcasting with no connections", () => {
 			const peer = new Peer("test-peer", { brokerUrl: "wss://test.com/mqtt" });
-			expect(() => peer.broadcast({ data: true })).not.toThrow();
+			expect(() => peer.broadcast(new Uint8Array([1, 2, 3]))).not.toThrow();
 		});
 	});
 });

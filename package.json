@@ -1,6 +1,6 @@
 {
   "name": "upeerjs",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Serverless P2P communication library using MQTT signaling with E2E encryption",
   "type": "module",
   "main": "./dist/index.cjs",

@@ -4,6 +4,40 @@ import type { MqttClient, IClientOptions } from "mqtt";
 import type { ICodec, IEncryption, ISignalingTransport, SignalingMessage, TransportMessageHandler } from "../types";
 import { VERSION } from "../util/constants";
 
+/**
+ * Token bucket rate limiter for signaling messages.
+ * Prevents signaling flood/DDoS by limiting outbound message rate.
+ */
+class TokenBucket {
+	private _tokens: number;
+	private _capacity: number;
+	private _refillRate: number; // tokens per second
+	private _lastRefill: number;
+
+	constructor(capacity: number, refillRate: number) {
+		this._capacity = capacity;
+		this._tokens = capacity;
+		this._refillRate = refillRate;
+		this._lastRefill = Date.now();
+	}
+
+	consume(): boolean {
+		this._refill();
+		if (this._tokens >= 1) {
+			this._tokens -= 1;
+			return true;
+		}
+		return false;
+	}
+
+	private _refill(): void {
+		const now = Date.now();
+		const elapsed = (now - this._lastRefill) / 1000;
+		this._tokens = Math.min(this._capacity, this._tokens + elapsed * this._refillRate);
+		this._lastRefill = now;
+	}
+}
+
 export class MqttTransport extends EventEmitter implements ISignalingTransport {
 	private _disconnected = true;
 	private _subscribed = false;
@@ -15,6 +49,12 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 	private _encryption: IEncryption | undefined;
 	private _messageHandler: TransportMessageHandler | undefined;
 	private _debug: boolean;
+	private _rateLimiter: TokenBucket;
+
+	// Broadcast: encrypted shared topic subscriptions
+	private static readonly BROADCAST_SUFFIX = ":ff";
+	private _broadcastTopics: Set<string> = new Set();
+	private _broadcastHandler: ((nodeId: string, data: Uint8Array) => void) | undefined;
 
 	private static readonly MAX_QUEUE_SIZE = 128;
 
@@ -35,10 +75,52 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 		this._codec = codec;
 		this._encryption = encryption;
 		this._debug = debug ?? false;
+		// Rate limiter: capacity 50 tokens, refill 10 tokens/second
+		this._rateLimiter = new TokenBucket(50, 10);
 	}
 
 	onMessage(handler: TransportMessageHandler): void {
 		this._messageHandler = handler;
+	}
+
+	/**
+	 * Register a handler for incoming broadcast messages.
+	 * Transport layer decrypts, then passes raw bytes to the handler.
+	 */
+	onBroadcast(handler: (nodeId: string, data: Uint8Array) => void): void {
+		this._broadcastHandler = handler;
+	}
+
+	/**
+	 * Subscribe to the broadcast MQTT topic for a nodeId (`${nodeId}:ff`).
+	 * Returns an unsubscribe function.
+	 */
+	subscribeBroadcast(nodeId: string): () => void {
+		const topic = nodeId + MqttTransport.BROADCAST_SUFFIX;
+		this._broadcastTopics.add(topic);
+
+		if (this._mqtt && !this._disconnected) {
+			this._mqtt.subscribe(topic);
+		}
+
+		return () => {
+			this._broadcastTopics.delete(topic);
+			if (this._mqtt && !this._disconnected) {
+				this._mqtt.unsubscribe(topic);
+			}
+		};
+	}
+
+	/**
+	 * Publish an encrypted broadcast message to `${nodeId}:ff`.
+	 */
+	async publishBroadcast(nodeId: string, data: Uint8Array): Promise<void> {
+		const topic = nodeId + MqttTransport.BROADCAST_SUFFIX;
+		let payload: Uint8Array = data;
+		if (this._encryption) {
+			payload = await this._encryption.encrypt(data);
+		}
+		this._publish(topic, payload);
 	}
 
 	connect(): void {
@@ -63,6 +145,8 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 		this._mqtt.on("connect", () => {
 			if (this._debug) console.warn("[upeer] MQTT connected");
 			this._disconnected = false;
+
+			// Subscribe to signaling topic (own peerId)
 			this._mqtt!.subscribe(this._peerId, (err: any) => {
 				if (err) {
 					console.error("[upeer] Subscribe error:", err);
@@ -70,21 +154,50 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 					return;
 				}
 				this._subscribed = true;
+
+				// Re-subscribe to any broadcast topics
+				for (const topic of this._broadcastTopics) {
+					this._mqtt!.subscribe(topic);
+				}
+
 				this._sendQueuedMessages();
 				this.emit("open");
 			});
 		});
 
 		this._mqtt.on("message", (topic, message) => {
+			// Rate limit inbound messages
+			if (!this._rateLimiter.consume()) {
+				if (this._debug) console.warn("[upeer] Rate limited inbound message");
+				return;
+			}
+
+			const raw = new Uint8Array(message.buffer, message.byteOffset, message.byteLength);
+
+			// Broadcast topic: encrypted, route to broadcast handler
+			if (this._broadcastTopics.has(topic)) {
+				const nodeId = topic.slice(0, -MqttTransport.BROADCAST_SUFFIX.length);
+				if (this._encryption) {
+					this._encryption.decrypt(raw).then((decrypted) => {
+						this._broadcastHandler?.(nodeId, decrypted);
+					}).catch((error) => {
+						if (this._debug) console.warn("[upeer] Broadcast decrypt failed:", error.message);
+					});
+				} else {
+					this._broadcastHandler?.(nodeId, raw);
+				}
+				return;
+			}
+
+			// Signaling topic: only process messages on own topic
 			if (topic !== this._peerId) return;
+
 			try {
-				const raw = new Uint8Array(message.buffer, message.byteOffset, message.byteLength);
 				if (this._encryption) {
 					this._encryption.decrypt(raw).then((decrypted) => {
 						this._dispatchMessage(this._codec.decode(decrypted));
 					}).catch((error) => {
-						console.error("[upeer] Decrypt error:", error);
-						this.emit("error", error);
+						if (this._debug) console.warn("[upeer] Decrypt failed, ignoring message:", error.message);
 					});
 				} else {
 					this._dispatchMessage(this._codec.decode(raw));
@@ -107,7 +220,7 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 	}
 
 	private _dispatchMessage(msg: any): void {
-		if (this._messageHandler && msg?.type === "signaling") {
+		if (this._messageHandler && msg?.type && msg?.src) {
 			this._messageHandler(msg as SignalingMessage);
 		}
 	}

@@ -1,12 +1,7 @@
-import { defineConfig } from "tsdown";
+import { defineConfig } from "vitest/config";
 import pkg from "./package.json" with { type: "json" };
 
 export default defineConfig({
-	entry: ["src/index.ts"],
-	format: ["esm", "cjs"],
-	dts: true,
-	clean: true,
-	sourcemap: true,
 	define: {
 		__VERSION__: JSON.stringify(pkg.version),
 	},

@@ -20,10 +20,11 @@ function createMockPC() {
 		getSenders: vi.fn(() => []),
 		getTransceivers: vi.fn(() => []),
 		addTransceiver: vi.fn(),
-		createDataChannel: vi.fn(() => ({
-			label: "dc:upeer",
+		createDataChannel: vi.fn((label: string, init?: RTCDataChannelInit) => ({
+			label,
 			readyState: "connecting",
 			close: vi.fn(),
+			...(init?.negotiated ? { id: init.id } : {}),
 		})),
 		close: vi.fn(),
 	};
@@ -52,9 +53,10 @@ describe("RtcSession", () => {
 		expect(session.peerId).toBe("peer-abc");
 		expect(session.peerConnection).toBeNull();
 		expect(session.dataChannel).toBeNull();
+		expect(session.controlChannel).toBeNull();
 	});
 
-	it("should create PeerConnection and DataChannel as offerer", async () => {
+	it("should create PeerConnection, DataChannel, and control channel as offerer", async () => {
 		const session = new RtcSession("peer-abc");
 		const signalingHandler = vi.fn();
 		session.on("signaling", signalingHandler);
@@ -63,6 +65,11 @@ describe("RtcSession", () => {
 
 		expect(session.peerConnection).toBe(mockPC);
 		expect(session.dataChannel).toBeDefined();
+		expect(session.controlChannel).toBeDefined();
+
+		// Control channel is negotiated with id 0
+		expect(mockPC.createDataChannel).toHaveBeenCalledWith("_ctrl", { negotiated: true, id: 0, ordered: true });
+		// Application DataChannel uses default label and options
 		expect(mockPC.createDataChannel).toHaveBeenCalledWith("dc:upeer", { ordered: true });
 
 		// Wait for async offer creation
@@ -73,8 +80,18 @@ describe("RtcSession", () => {
 
 		// Should emit signaling with offer (immediate flush)
 		expect(signalingHandler).toHaveBeenCalled();
-		const items = signalingHandler.mock.calls[0][0];
-		expect(items[0].type).toBe(SignalingType.Offer);
+		expect(signalingHandler.mock.calls[0][0]).toBe(SignalingType.Offer);
+	});
+
+	it("should use custom dataChannelLabel and dataChannelInit", async () => {
+		const session = new RtcSession("peer-abc", {
+			dataChannelLabel: "custom-dc",
+			dataChannelInit: { ordered: false, maxRetransmits: 0 },
+		});
+
+		session.startAsOfferer(undefined, true);
+
+		expect(mockPC.createDataChannel).toHaveBeenCalledWith("custom-dc", { ordered: false, maxRetransmits: 0 });
 	});
 
 	it("should create PeerConnection as answerer", async () => {
@@ -86,8 +103,12 @@ describe("RtcSession", () => {
 		session.startAsAnswerer(offerSdp);
 
 		expect(session.peerConnection).toBe(mockPC);
-		// Answerer doesn't create DataChannel
-		expect(mockPC.createDataChannel).not.toHaveBeenCalled();
+		// Answerer doesn't create application DataChannel
+		// But control channel is created (negotiated)
+		expect(session.controlChannel).toBeDefined();
+		// createDataChannel called once for control channel only
+		expect(mockPC.createDataChannel).toHaveBeenCalledTimes(1);
+		expect(mockPC.createDataChannel).toHaveBeenCalledWith("_ctrl", { negotiated: true, id: 0, ordered: true });
 
 		await vi.waitFor(() => {
 			expect(mockPC.setRemoteDescription).toHaveBeenCalled();
@@ -97,8 +118,7 @@ describe("RtcSession", () => {
 
 		// Should emit signaling with answer
 		expect(signalingHandler).toHaveBeenCalled();
-		const items = signalingHandler.mock.calls[0][0];
-		expect(items[0].type).toBe(SignalingType.Answer);
+		expect(signalingHandler.mock.calls[0][0]).toBe(SignalingType.Answer);
 	});
 
 	it("should handle incoming answer signaling", async () => {
@@ -158,7 +178,7 @@ describe("RtcSession", () => {
 		expect(session.peerConnection).toBeNull();
 	});
 
-	it("should emit dataChannel event on incoming datachannel", () => {
+	it("should emit dataChannel event on incoming datachannel with matching label", () => {
 		const session = new RtcSession("peer-abc");
 		const dcHandler = vi.fn();
 		session.on("dataChannel", dcHandler);
@@ -219,6 +239,7 @@ describe("RtcSession", () => {
 		expect(mockPC.close).toHaveBeenCalled();
 		expect(session.peerConnection).toBeNull();
 		expect(session.dataChannel).toBeNull();
+		expect(session.controlChannel).toBeNull();
 		expect(closeHandler).toHaveBeenCalled();
 	});
 
