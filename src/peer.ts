@@ -103,16 +103,6 @@ export class Peer extends EventEmitter {
 				case SignalingType.Offer:
 					this._handleIncomingOffer(peerId, message.data);
 					break;
-				case SignalingType.Candidate: {
-					const session = this._sessions.get(peerId);
-					if (session) {
-						const candidates = Array.isArray(message.data) ? message.data : [message.data];
-						for (const payload of candidates) {
-							session.handleSignaling(SignalingType.Candidate, payload);
-						}
-					}
-					break;
-				}
 				default: {
 					const session = this._sessions.get(peerId);
 					if (session) {
