@@ -104,11 +104,11 @@ describe("RtcSession", () => {
 
 		expect(session.peerConnection).toBe(mockPC);
 		// Answerer doesn't create application DataChannel
-		// But control channel is created (negotiated)
+		// But control + bulk channels are created (negotiated)
 		expect(session.controlChannel).toBeDefined();
-		// createDataChannel called once for control channel only
-		expect(mockPC.createDataChannel).toHaveBeenCalledTimes(1);
+		expect(mockPC.createDataChannel).toHaveBeenCalledTimes(2);
 		expect(mockPC.createDataChannel).toHaveBeenCalledWith("_ctrl", { negotiated: true, id: 0, ordered: true });
+		expect(mockPC.createDataChannel).toHaveBeenCalledWith("dc:bulk", { negotiated: true, id: 1, ordered: true });
 
 		await vi.waitFor(() => {
 			expect(mockPC.setRemoteDescription).toHaveBeenCalled();
