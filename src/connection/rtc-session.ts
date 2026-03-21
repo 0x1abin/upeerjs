@@ -24,6 +24,7 @@ export class RtcSession extends EventEmitter {
 	peerConnection: RTCPeerConnection | null = null;
 	dataChannel: RTCDataChannel | null = null;
 	controlChannel: RTCDataChannel | null = null;
+	transferChannel: RTCDataChannel | null = null;
 
 	private _batcher: SignalingBatcher;
 	private _options: RtcSessionOptions;
@@ -110,6 +111,10 @@ export class RtcSession extends EventEmitter {
 			this.controlChannel.close();
 		}
 
+		if (this.transferChannel && this.transferChannel.readyState !== "closed") {
+			this.transferChannel.close();
+		}
+
 		if (this.dataChannel && this.dataChannel.readyState !== "closed") {
 			this.dataChannel.close();
 		}
@@ -126,6 +131,7 @@ export class RtcSession extends EventEmitter {
 		this.peerConnection = null;
 		this.dataChannel = null;
 		this.controlChannel = null;
+		this.transferChannel = null;
 		this.emit("close");
 	}
 
@@ -137,6 +143,8 @@ export class RtcSession extends EventEmitter {
 
 		// Negotiated control channel — both sides create independently, no SDP overhead
 		this.controlChannel = pc.createDataChannel("_ctrl", { negotiated: true, id: 0, ordered: true });
+		// Negotiated transfer channel — for bulk file transfers (ordered + reliable)
+		this.transferChannel = pc.createDataChannel("dc:transfer", { negotiated: true, id: 1, ordered: true });
 
 		this._setupListeners(pc);
 		return pc;

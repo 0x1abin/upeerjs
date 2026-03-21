@@ -300,6 +300,11 @@ export class Peer extends EventEmitter {
 		return this._connectionStates.get(peerId) ?? ConnectionState.Init;
 	}
 
+	/** Get the RtcSession for a peer (exposes peerConnection for extra DataChannels) */
+	getSession(peerId: string): RtcSession | undefined {
+		return this._sessions.get(peerId);
+	}
+
 	// ── Private: Session Management ──
 
 	private _createSession(peerId: string, constraints?: RTCOfferOptions): RtcSession {
