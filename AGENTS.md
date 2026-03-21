@@ -44,7 +44,7 @@ The library is a layered stack where `Peer` orchestrates everything:
 
 Signaling: `Peer → Codec.encode → MqttTransport.send → Encryption.encrypt → MQTT broker → remote peer (reverse path)`
 
-Media/Data: `Peer.call()/connect() → RtcSession (creates RTCPeerConnection + negotiated _ctrl channel) → DataConnection wraps the application DataChannel`
+Media/Data: `Peer.call()/connect() → RtcSession (creates RTCPeerConnection + negotiated _ctrl channel) → DataConnection wraps the application DataChannel (dc:upeer). Upper layers can create additional negotiated DataChannels via session.peerConnection`
 
 Heartbeat: `Peer → msgpack({ ts }) → session.controlChannel (negotiated, id: 0) → remote Peer decodes → replies { ts, pong: true }`
 

@@ -94,7 +94,7 @@ describe("RtcSession", () => {
 		expect(mockPC.createDataChannel).toHaveBeenCalledWith("custom-dc", { ordered: false, maxRetransmits: 0 });
 	});
 
-	it("should create PeerConnection as answerer", async () => {
+	it("should create PeerConnection as answerer with only control channel", async () => {
 		const session = new RtcSession("peer-abc");
 		const signalingHandler = vi.fn();
 		session.on("signaling", signalingHandler);
@@ -104,11 +104,10 @@ describe("RtcSession", () => {
 
 		expect(session.peerConnection).toBe(mockPC);
 		// Answerer doesn't create application DataChannel
-		// But control + bulk channels are created (negotiated)
+		// Only control channel is created (negotiated)
 		expect(session.controlChannel).toBeDefined();
-		expect(mockPC.createDataChannel).toHaveBeenCalledTimes(2);
+		expect(mockPC.createDataChannel).toHaveBeenCalledTimes(1);
 		expect(mockPC.createDataChannel).toHaveBeenCalledWith("_ctrl", { negotiated: true, id: 0, ordered: true });
-		expect(mockPC.createDataChannel).toHaveBeenCalledWith("dc:bulk", { negotiated: true, id: 1, ordered: true });
 
 		await vi.waitFor(() => {
 			expect(mockPC.setRemoteDescription).toHaveBeenCalled();

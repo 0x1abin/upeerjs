@@ -26,7 +26,6 @@ export class Peer extends EventEmitter {
 
 	private _sessions = new Map<string, RtcSession>();
 	private _dataConnections = new Map<string, DataConnection>();
-	private _bulkConnections = new Map<string, DataConnection>();
 	private _transport: MqttTransport | undefined;
 	private _options: PeerOptions;
 	private _codec: ICodec;
@@ -206,7 +205,6 @@ export class Peer extends EventEmitter {
 
 		this.emit("call", { peerId, call: session });
 		this._initDataChannel(peerId);
-		this._initBulkChannel(peerId);
 
 		return session;
 	}
@@ -228,7 +226,6 @@ export class Peer extends EventEmitter {
 		});
 
 		this._wrapDataChannel(peerId, session.dataChannel!);
-		this._initBulkChannel(peerId);
 		return session;
 	}
 
@@ -243,11 +240,6 @@ export class Peer extends EventEmitter {
 			if (options?.excludeId?.includes(peerId)) return;
 			conn.send(data);
 		});
-	}
-
-	/** Send raw bytes via the bulk DataChannel (for large transfers) */
-	sendBulk(peerId: string, data: Uint8Array | ArrayBuffer): void {
-		this._bulkConnections.get(peerId)?.send(data);
 	}
 
 	/** Replace media tracks for a specific peer */
@@ -272,7 +264,6 @@ export class Peer extends EventEmitter {
 			session.close();
 			this._sessions.delete(peerId);
 			this._dataConnections.delete(peerId);
-			this._bulkConnections.delete(peerId);
 			this._setConnectionState(peerId, ConnectionState.Disconnected);
 			this.emit("hangup", { peerId, call: session });
 		}
@@ -287,10 +278,8 @@ export class Peer extends EventEmitter {
 	disconnect(): void {
 		this._sessions.forEach((session) => session.close());
 		this._dataConnections.forEach((conn) => conn.close());
-		this._bulkConnections.forEach((conn) => conn.close());
 		this._sessions.clear();
 		this._dataConnections.clear();
-		this._bulkConnections.clear();
 		this._stopAllHeartbeats();
 		this._clearAllRecoveryTimers();
 		this._connectionStates.clear();
@@ -356,8 +345,6 @@ export class Peer extends EventEmitter {
 			this._wrapDataChannel(peerId, dc);
 		});
 
-		// Bulk channel is negotiated — both sides create independently
-		this._initBulkChannel(peerId);
 	}
 
 	// ── Private: Connection State Machine ──
@@ -436,7 +423,6 @@ export class Peer extends EventEmitter {
 	private _handleSessionClose(peerId: string, session: RtcSession): void {
 		this._sessions.delete(peerId);
 		this._dataConnections.delete(peerId);
-		this._bulkConnections.delete(peerId);
 		this._stopHeartbeat(peerId);
 		this._clearRecoveryTimer(peerId);
 		this._setConnectionState(peerId, ConnectionState.Disconnected);
@@ -593,28 +579,6 @@ export class Peer extends EventEmitter {
 		this._wrapDataChannel(peerId, session.dataChannel);
 	}
 
-	private _initBulkChannel(peerId: string): void {
-		const session = this._sessions.get(peerId);
-		if (!session?.bulkChannel) return;
-		this._wrapBulkChannel(peerId, session.bulkChannel);
-	}
-
-	private _wrapBulkChannel(peerId: string, dataChannel: RTCDataChannel): DataConnection {
-		const dc = new DataConnection(dataChannel);
-		dc.on("open", () => {
-			this._bulkConnections.set(peerId, dc);
-			this.emit("bulkConnection", { peerId, conn: dc });
-		});
-		dc.on("data", (data: Uint8Array) => {
-			this.emit("bulkData", { peerId, data, conn: dc });
-		});
-		dc.on("close", () => {
-			this._bulkConnections.delete(peerId);
-			this.emit("bulkDisconnect", { peerId, conn: dc });
-		});
-		return dc;
-	}
-
 	private _cleanupPeer(peerId: string): void {
 		this._stopHeartbeat(peerId);
 		this._clearRecoveryTimer(peerId);
@@ -622,11 +586,6 @@ export class Peer extends EventEmitter {
 		if (existingDc) {
 			existingDc.close();
 			this._dataConnections.delete(peerId);
-		}
-		const existingBulk = this._bulkConnections.get(peerId);
-		if (existingBulk) {
-			existingBulk.close();
-			this._bulkConnections.delete(peerId);
 		}
 		const existingSession = this._sessions.get(peerId);
 		if (existingSession) {
