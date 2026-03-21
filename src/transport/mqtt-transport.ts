@@ -3,6 +3,7 @@ import mqtt from "mqtt";
 import type { MqttClient, IClientOptions } from "mqtt";
 import type { ICodec, IEncryption, ISignalingTransport, SignalingMessage, TransportMessageHandler } from "../types";
 import { VERSION } from "../util/constants";
+import { createLogger, type Logger } from "../util/logger";
 
 /**
  * Token bucket rate limiter for signaling messages.
@@ -48,7 +49,7 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 	private _codec: ICodec;
 	private _encryption: IEncryption | undefined;
 	private _messageHandler: TransportMessageHandler | undefined;
-	private _debug: boolean;
+	private _log: Logger;
 	private _rateLimiter: TokenBucket;
 
 	// Broadcast: encrypted shared topic subscriptions
@@ -67,14 +68,14 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 		options: IClientOptions,
 		codec: ICodec,
 		encryption?: IEncryption,
-		debug?: boolean,
+		logger?: Logger,
 	) {
 		super();
 		this._peerId = peerId;
 		this._mqttOptions = options;
 		this._codec = codec;
 		this._encryption = encryption;
-		this._debug = debug ?? false;
+		this._log = logger ?? createLogger("upeer:mqtt");
 		// Rate limiter: capacity 50 tokens, refill 10 tokens/second
 		this._rateLimiter = new TokenBucket(50, 10);
 	}
@@ -125,7 +126,7 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 
 	connect(): void {
 		if (!this._disconnected || this._mqtt) {
-			console.warn("[upeer] Already connected");
+			this._log.warn("Already connected");
 			return;
 		}
 
@@ -143,13 +144,13 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 		this._mqtt = mqtt.connect(options);
 
 		this._mqtt.on("connect", () => {
-			if (this._debug) console.warn("[upeer] MQTT connected");
+			this._log.debug("MQTT connected");
 			this._disconnected = false;
 
 			// Subscribe to signaling topic (own peerId)
 			this._mqtt!.subscribe(this._peerId, (err: any) => {
 				if (err) {
-					console.error("[upeer] Subscribe error:", err);
+					this._log.error("Subscribe error:", err);
 					this.emit("error", err);
 					return;
 				}
@@ -168,7 +169,7 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 		this._mqtt.on("message", (topic, message) => {
 			// Rate limit inbound messages
 			if (!this._rateLimiter.consume()) {
-				if (this._debug) console.warn("[upeer] Rate limited inbound message");
+				this._log.debug("Rate limited inbound message");
 				return;
 			}
 
@@ -181,7 +182,7 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 					this._encryption.decrypt(raw).then((decrypted) => {
 						this._broadcastHandler?.(nodeId, decrypted);
 					}).catch((error) => {
-						if (this._debug) console.warn("[upeer] Broadcast decrypt failed:", error.message);
+						this._log.debug("Broadcast decrypt failed:", error.message);
 					});
 				} else {
 					this._broadcastHandler?.(nodeId, raw);
@@ -197,19 +198,19 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 					this._encryption.decrypt(raw).then((decrypted) => {
 						this._dispatchMessage(this._codec.decode(decrypted));
 					}).catch((error) => {
-						if (this._debug) console.warn("[upeer] Decrypt failed, ignoring message:", error.message);
+						this._log.debug("Decrypt failed, ignoring message:", error.message);
 					});
 				} else {
 					this._dispatchMessage(this._codec.decode(raw));
 				}
 			} catch (error) {
-				console.error("[upeer] Message error:", error);
+				this._log.error("Message error:", error);
 				this.emit("error", error);
 			}
 		});
 
 		this._mqtt.on("disconnect", () => {
-			console.warn("[upeer] MQTT disconnected");
+			this._log.warn("MQTT disconnected");
 			this._subscribed = false;
 			this._disconnected = true;
 			this.emit("disconnected");
@@ -244,7 +245,7 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 			if (this._messagesQueue.length < MqttTransport.MAX_QUEUE_SIZE) {
 				this._messagesQueue.push({ topic, message });
 			} else {
-				console.warn("[upeer] Message queue full, dropping message");
+				this._log.warn("Message queue full, dropping message");
 			}
 			return;
 		}

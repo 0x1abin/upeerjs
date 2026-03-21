@@ -30,6 +30,7 @@ The library is a layered stack where `Peer` orchestrates everything:
 - **MqttTransport** (`src/transport/mqtt-transport.ts`) — Default `ISignalingTransport` implementation. Publishes/subscribes to MQTT topics for peer-to-peer signaling and encrypted broadcast (`{nodeId}:ff`). Extends EventEmitter3.
 - **AesGcmEncryption** (`src/security/aes-gcm-encryption.ts`) — Default `IEncryption` implementation using Web Crypto AES-GCM.
 - **Constants** (`src/util/constants.ts`) — `VERSION` and `DEFAULT_RTC_CONFIG`.
+- **Logger** (`src/util/logger.ts`) — Structured logging with `LogLevel` enum and `createLogger(tag, debug?)` factory.
 
 ### Key interfaces (in `src/types.ts`)
 
@@ -52,6 +53,16 @@ Broadcast: `Peer.publish(topic, data) → Codec.encode({t, d}) → MqttTransport
 ## Build
 
 Uses `tsdown` (not `tsup`). Config in `tsdown.config.ts`. Outputs ESM, CJS, and declaration files to `dist/`.
+
+## Logging
+
+All logging uses `Logger` from `src/util/logger.ts` — no raw `console.*` calls.
+
+- `PeerOptions.debug: true` → Logger set to `LogLevel.Debug` (verbose connection/ICE/MQTT logs)
+- `PeerOptions.debug: false` (default) → `LogLevel.Warnings` (only errors and warnings)
+- Tag: `upeer` (Peer shares its logger with RtcSession and MqttTransport via constructor injection)
+- Fallback tags when constructed standalone: `upeer:mqtt`, `upeer:rtc`, `upeer:dc`
+- Output format: `D [upeer]: ICE state: connected for abc123`
 
 ## Testing
 

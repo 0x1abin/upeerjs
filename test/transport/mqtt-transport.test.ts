@@ -164,7 +164,7 @@ describe("MqttTransport", () => {
 		mockMqttClient.emit("connect");
 
 		transport.connect(); // second call should warn
-		expect(warnSpy).toHaveBeenCalledWith("[upeer] Already connected");
+		expect(warnSpy).toHaveBeenCalledWith("W", "[upeer:mqtt]:", "Already connected");
 
 		warnSpy.mockRestore();
 	});
@@ -202,7 +202,7 @@ describe("MqttTransport", () => {
 		}
 
 		// 128 should be queued, 129th dropped
-		expect(warnSpy).toHaveBeenCalledWith("[upeer] Message queue full, dropping message");
+		expect(warnSpy).toHaveBeenCalledWith("W", "[upeer:mqtt]:", "Message queue full, dropping message");
 		warnSpy.mockRestore();
 	});
 

@@ -1,6 +1,7 @@
 import { EventEmitter } from "eventemitter3";
 import { SignalingBatcher } from "./signaling-batcher";
 import { SignalingType } from "../types";
+import { createLogger, type Logger } from "../util/logger";
 
 export interface RtcSessionOptions {
 	rtcConfig?: RTCConfiguration;
@@ -8,7 +9,7 @@ export interface RtcSessionOptions {
 	sdpTransform?: (sdp: string) => string;
 	dataChannelLabel?: string;
 	dataChannelInit?: RTCDataChannelInit;
-	debug?: boolean;
+	logger?: Logger;
 }
 
 export interface RtcSessionEvents {
@@ -29,7 +30,7 @@ export class RtcSession extends EventEmitter {
 	private _options: RtcSessionOptions;
 	private _dataChannelLabel: string;
 	private _dataChannelInit: RTCDataChannelInit;
-	private _debug: boolean;
+	private _log: Logger;
 
 	constructor(peerId: string, options: RtcSessionOptions = {}) {
 		super();
@@ -37,7 +38,7 @@ export class RtcSession extends EventEmitter {
 		this._options = options;
 		this._dataChannelLabel = options.dataChannelLabel ?? "dc:upeer";
 		this._dataChannelInit = options.dataChannelInit ?? { ordered: true };
-		this._debug = options.debug ?? false;
+		this._log = options.logger ?? createLogger("upeer:rtc");
 		this._batcher = new SignalingBatcher(
 			(type, data) => this.emit("signaling", type, data),
 		);
@@ -88,7 +89,7 @@ export class RtcSession extends EventEmitter {
 	/** Trigger ICE restart to recover from network changes */
 	iceRestart(): void {
 		if (!this.peerConnection) return;
-		if (this._debug) console.warn(`[upeer] ICE restart for ${this.peerId}`);
+		this._log.debug(`ICE restart for ${this.peerId}`);
 		void this._makeOffer(true);
 	}
 
@@ -160,7 +161,7 @@ export class RtcSession extends EventEmitter {
 
 		pc.oniceconnectionstatechange = () => {
 			const state = pc.iceConnectionState;
-			if (this._debug) console.warn(`[upeer] ICE state: ${state} for ${this.peerId}`);
+			this._log.debug(`ICE state: ${state} for ${this.peerId}`);
 
 			switch (state) {
 				case "failed":
@@ -209,7 +210,7 @@ export class RtcSession extends EventEmitter {
 			);
 		} catch (err: any) {
 			if (err?.toString?.().includes("kHaveRemoteOffer")) return;
-			console.error("[upeer] Failed to create/set offer:", err);
+			this._log.error("Failed to create/set offer:", err);
 		}
 	}
 
@@ -226,7 +227,7 @@ export class RtcSession extends EventEmitter {
 				},
 			);
 		} catch (err) {
-			console.error("[upeer] Failed to create/set answer:", err);
+			this._log.error("Failed to create/set answer:", err);
 		}
 	}
 
@@ -240,7 +241,7 @@ export class RtcSession extends EventEmitter {
 				await this._makeAnswer();
 			}
 		} catch (err) {
-			console.error("[upeer] Failed to setRemoteDescription:", err);
+			this._log.error("Failed to setRemoteDescription:", err);
 		}
 	}
 
@@ -248,7 +249,7 @@ export class RtcSession extends EventEmitter {
 		try {
 			await this.peerConnection!.addIceCandidate(ice);
 		} catch (err) {
-			console.error("[upeer] Failed to handleCandidate:", err);
+			this._log.error("Failed to handleCandidate:", err);
 		}
 	}
 

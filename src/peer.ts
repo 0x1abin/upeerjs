@@ -9,6 +9,7 @@ import { DataConnection } from "./data/data-connection";
 import type { PeerOptions, ICodec, IEncryption } from "./types";
 import { SignalingType } from "./types";
 import { DEFAULT_RTC_CONFIG } from "./util/constants";
+import { createLogger, type Logger } from "./util/logger";
 
 /** Connection lifecycle states */
 export enum ConnectionState {
@@ -30,7 +31,7 @@ export class Peer extends EventEmitter {
 	private _options: PeerOptions;
 	private _codec: ICodec;
 	private _encryption: IEncryption | undefined;
-	private _debug: boolean;
+	private _log: Logger;
 
 	// Broadcast pub/sub: nodeId → (appTopic → Set<handler>)
 	private _broadcastSubs = new Map<string, Map<string, Set<(data: any) => void>>>();
@@ -65,7 +66,7 @@ export class Peer extends EventEmitter {
 			this._options = peerIdOrOptions;
 		}
 
-		this._debug = this._options.debug ?? false;
+		this._log = createLogger("upeer", this._options.debug);
 		this._codec = this._options.codec ?? new MsgpackCodec();
 
 		if (this._options.encryption) {
@@ -94,7 +95,7 @@ export class Peer extends EventEmitter {
 			mqttOptions,
 			this._codec,
 			this._encryption,
-			this._debug,
+			this._log,
 		);
 
 		this._transport.onMessage((message) => {
@@ -143,7 +144,7 @@ export class Peer extends EventEmitter {
 	 */
 	publish(topic: string, data: any): void {
 		if (!this._transport) {
-			console.error("[upeer] Transport not connected");
+			this._log.error("Transport not connected");
 			return;
 		}
 		const encoded = this._codec.encode({ t: topic, d: data });
@@ -318,7 +319,7 @@ export class Peer extends EventEmitter {
 			constraints,
 			dataChannelLabel: this._options.dataChannelLabel,
 			dataChannelInit: this._options.dataChannelInit,
-			debug: this._debug,
+			logger: this._log,
 		});
 
 		session.on("signaling", (type: SignalingType, data: any) => {
@@ -365,9 +366,7 @@ export class Peer extends EventEmitter {
 		const prev = this._connectionStates.get(peerId);
 		if (prev === state) return;
 		this._connectionStates.set(peerId, state);
-		if (this._debug) {
-			console.warn(`[upeer] Connection state: ${prev ?? "none"} → ${state} for ${peerId}`);
-		}
+		this._log.debug(`Connection state: ${prev ?? "none"} → ${state} for ${peerId}`);
 	}
 
 	private _handleIceStateChange(peerId: string, session: RtcSession, state: RTCIceConnectionState): void {
@@ -406,7 +405,7 @@ export class Peer extends EventEmitter {
 	}
 
 	private _attemptIceRestart(peerId: string, session: RtcSession): void {
-		if (this._debug) console.warn(`[upeer] Attempting ICE restart for ${peerId}`);
+		this._log.debug(`Attempting ICE restart for ${peerId}`);
 
 		session.iceRestart();
 
@@ -414,7 +413,7 @@ export class Peer extends EventEmitter {
 		this._recoveryTimers.set(peerId, setTimeout(() => {
 			const state = this._connectionStates.get(peerId);
 			if (state === ConnectionState.Recovering) {
-				if (this._debug) console.warn(`[upeer] ICE restart timeout for ${peerId}`);
+				this._log.warn(`ICE restart timeout for ${peerId}`);
 				this._setConnectionState(peerId, ConnectionState.Disconnected);
 				session.close();
 			}
@@ -523,7 +522,7 @@ export class Peer extends EventEmitter {
 			this._missedPongs.set(peerId, missed);
 
 			if (missed >= Peer.MAX_MISSED_PONGS) {
-				if (this._debug) console.warn(`[upeer] Heartbeat timeout for ${peerId}, attempting ICE restart`);
+				this._log.warn(`Heartbeat timeout for ${peerId}, attempting ICE restart`);
 				const session = this._sessions.get(peerId);
 				if (session) {
 					this._setConnectionState(peerId, ConnectionState.Recovering);
@@ -560,7 +559,7 @@ export class Peer extends EventEmitter {
 
 	private _sendSignaling(peerId: string, type: SignalingType, data: any): void {
 		if (!this._transport) {
-			console.error("[upeer] Transport not connected");
+			this._log.error("Transport not connected");
 			return;
 		}
 		const encoded = this._codec.encode({

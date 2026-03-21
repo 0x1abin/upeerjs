@@ -1,13 +1,16 @@
 import { EventEmitter } from "eventemitter3";
+import { createLogger, type Logger } from "../util/logger";
 
 export class DataConnection extends EventEmitter {
 	private static readonly MAX_BUFFERED_AMOUNT = 8 * 1024 * 1024; // 8MB
 
 	private _closed = false;
+	private _log: Logger;
 	dataChannel: RTCDataChannel;
 
-	constructor(dataChannel: RTCDataChannel) {
+	constructor(dataChannel: RTCDataChannel, logger?: Logger) {
 		super();
+		this._log = logger ?? createLogger("upeer:dc");
 		this.dataChannel = dataChannel;
 		this._initializeDataChannel();
 	}
@@ -46,7 +49,7 @@ export class DataConnection extends EventEmitter {
 		try {
 			this.dataChannel.send(bytes as Uint8Array<ArrayBuffer>);
 		} catch (e) {
-			console.error(`[upeer] DC#${this.dataChannel.id} send error:`, e);
+			this._log.error(`DC#${this.dataChannel.id} send error:`, e);
 			this.close();
 		}
 	}

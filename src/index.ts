@@ -32,3 +32,6 @@ export { DataConnection } from "./data/data-connection";
 // Utilities
 export { JsonCodec, MsgpackCodec } from "./util/codec";
 export { generatePeerId } from "./util/id-generator";
+
+// Logger
+export { Logger, LogLevel, createLogger } from "./util/logger";
