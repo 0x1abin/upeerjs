@@ -3,8 +3,13 @@ import { EventEmitter } from "eventemitter3";
 import { encode as msgpackEncode } from "@msgpack/msgpack";
 
 // Mock mqtt before importing Peer
-const mockMqttClient = new EventEmitter() as any;
-mockMqttClient.subscribe = vi.fn((_topic: string, cb: (err: any) => void) => cb(null));
+interface MockMqttClient extends EventEmitter {
+	subscribe: ReturnType<typeof vi.fn>;
+	publish: ReturnType<typeof vi.fn>;
+	end: ReturnType<typeof vi.fn>;
+}
+const mockMqttClient = new EventEmitter() as MockMqttClient;
+mockMqttClient.subscribe = vi.fn((_topic: string, cb: (err: Error | null) => void) => cb(null));
 mockMqttClient.publish = vi.fn();
 mockMqttClient.end = vi.fn();
 
@@ -17,10 +22,10 @@ vi.mock("mqtt", () => ({
 // Mock RTCPeerConnection
 function createMockPC() {
 	return {
-		onicecandidate: null as any,
-		oniceconnectionstatechange: null as any,
-		ontrack: null as any,
-		ondatachannel: null as any,
+		onicecandidate: null as RTCPeerConnection["onicecandidate"],
+		oniceconnectionstatechange: null as RTCPeerConnection["oniceconnectionstatechange"],
+		ontrack: null as RTCPeerConnection["ontrack"],
+		ondatachannel: null as RTCPeerConnection["ondatachannel"],
 		iceConnectionState: "new",
 		signalingState: "stable",
 		createOffer: vi.fn(async () => ({ type: "offer", sdp: "mock-offer" })),
@@ -32,7 +37,7 @@ function createMockPC() {
 		getSenders: vi.fn(() => []),
 		getTransceivers: vi.fn(() => []),
 		addTransceiver: vi.fn(),
-		createDataChannel: vi.fn((label: string, init?: any) => ({
+		createDataChannel: vi.fn((label: string, init?: RTCDataChannelInit) => ({
 			label,
 			readyState: "connecting",
 			close: vi.fn(),
@@ -52,7 +57,7 @@ function createMockPC() {
 vi.stubGlobal("RTCPeerConnection", function MockRTCPeerConnection() {
 	return createMockPC();
 });
-vi.stubGlobal("RTCSessionDescription", function MockRTCSessionDescription(init: any) {
+vi.stubGlobal("RTCSessionDescription", function MockRTCSessionDescription(init: RTCSessionDescriptionInit) {
 	return init;
 });
 
@@ -62,7 +67,7 @@ describe("Peer", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockMqttClient.removeAllListeners();
-		mockMqttClient.subscribe = vi.fn((_topic: string, cb: (err: any) => void) => cb(null));
+		mockMqttClient.subscribe = vi.fn((_topic: string, cb: (err: Error | null) => void) => cb(null));
 	});
 
 	describe("constructor", () => {
@@ -230,7 +235,7 @@ describe("Peer", () => {
 	describe("setLocalStream", () => {
 		it("should store local stream", () => {
 			const peer = new Peer("test-peer", { brokerUrl: "wss://test.com/mqtt" });
-			const mockStream = { id: "local-stream" } as any;
+			const mockStream = { id: "local-stream" } as unknown as MediaStream;
 			peer.setLocalStream(mockStream);
 			expect(peer.localStream).toBe(mockStream);
 		});

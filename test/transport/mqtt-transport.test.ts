@@ -4,8 +4,13 @@ import { MqttTransport } from "../../src/transport/mqtt-transport";
 import { JsonCodec } from "../../src/util/codec";
 
 // Mock mqtt module
-const mockMqttClient = new EventEmitter() as any;
-mockMqttClient.subscribe = vi.fn((topic: string, cb: (err: any) => void) => cb(null));
+interface MockMqttClient extends EventEmitter {
+	subscribe: ReturnType<typeof vi.fn>;
+	publish: ReturnType<typeof vi.fn>;
+	end: ReturnType<typeof vi.fn>;
+}
+const mockMqttClient = new EventEmitter() as MockMqttClient;
+mockMqttClient.subscribe = vi.fn((_topic: string, cb: (err: Error | null) => void) => cb(null));
 mockMqttClient.publish = vi.fn();
 mockMqttClient.end = vi.fn();
 
@@ -22,7 +27,7 @@ describe("MqttTransport", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockMqttClient.removeAllListeners();
-		mockMqttClient.subscribe = vi.fn((topic: string, cb: (err: any) => void) => cb(null));
+		mockMqttClient.subscribe = vi.fn((_topic: string, cb: (err: Error | null) => void) => cb(null));
 		transport = new MqttTransport("test-peer", { url: "wss://test.com/mqtt" }, codec);
 	});
 
@@ -42,7 +47,7 @@ describe("MqttTransport", () => {
 	});
 
 	it("should emit error on subscribe failure", () => {
-		mockMqttClient.subscribe = vi.fn((_topic: string, cb: (err: any) => void) =>
+		mockMqttClient.subscribe = vi.fn((_topic: string, cb: (err: Error | null) => void) =>
 			cb(new Error("sub failed")),
 		);
 

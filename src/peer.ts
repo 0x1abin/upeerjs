@@ -33,7 +33,7 @@ export class Peer extends EventEmitter {
 	private _log: Logger;
 
 	// Broadcast pub/sub: nodeId → (appTopic → Set<handler>)
-	private _broadcastSubs = new Map<string, Map<string, Set<(data: any) => void>>>();
+	private _broadcastSubs = new Map<string, Map<string, Set<(data: unknown) => void>>>();
 	// nodeId → MQTT unsubscribe fn
 	private _broadcastUnsubs = new Map<string, () => void>();
 
@@ -99,14 +99,15 @@ export class Peer extends EventEmitter {
 
 		this._transport.onMessage((message) => {
 			const peerId = message.src;
+			const data = message.data as Record<string, unknown>;
 			switch (message.type) {
 				case SignalingType.Offer:
-					this._handleIncomingOffer(peerId, message.data);
+					this._handleIncomingOffer(peerId, data);
 					break;
 				default: {
 					const session = this._sessions.get(peerId);
 					if (session) {
-						session.handleSignaling(message.type, message.data);
+						session.handleSignaling(message.type, data);
 					}
 					break;
 				}
@@ -114,7 +115,7 @@ export class Peer extends EventEmitter {
 		});
 
 		this._transport.onBroadcast((nodeId, decryptedBytes) => {
-			const msg = this._codec.decode(decryptedBytes); // { t: string, d: any }
+			const msg = this._codec.decode(decryptedBytes) as { t: string; d: unknown };
 			const topicMap = this._broadcastSubs.get(nodeId);
 			if (!topicMap) return;
 			const handlers = topicMap.get(msg.t);
@@ -129,7 +130,7 @@ export class Peer extends EventEmitter {
 		this._transport.on("close", () => {
 			this.emit("close");
 		});
-		this._transport.on("error", (err: any) => {
+		this._transport.on("error", (err: unknown) => {
 			this.emit("error", err);
 		});
 
@@ -141,7 +142,7 @@ export class Peer extends EventEmitter {
 	 * @param topic - Application-level topic (e.g. 'presence')
 	 * @param data  - Any serializable data
 	 */
-	publish(topic: string, data: any): void {
+	publish(topic: string, data: unknown): void {
 		if (!this._transport) {
 			this._log.error("Transport not connected");
 			return;
@@ -154,7 +155,7 @@ export class Peer extends EventEmitter {
 	 * Subscribe to a specific application-level topic on a nodeId's broadcast channel.
 	 * @returns unsubscribe function
 	 */
-	subscribe(nodeId: string, topic: string, handler: (data: any) => void): () => void {
+	subscribe(nodeId: string, topic: string, handler: (data: unknown) => void): () => void {
 		// Register handler
 		let topicMap = this._broadcastSubs.get(nodeId);
 		if (!topicMap) { topicMap = new Map(); this._broadcastSubs.set(nodeId, topicMap); }
@@ -316,7 +317,7 @@ export class Peer extends EventEmitter {
 			logger: this._log,
 		});
 
-		session.on("signaling", (type: SignalingType, data: any) => {
+		session.on("signaling", (type: SignalingType, data: unknown) => {
 			this._sendSignaling(peerId, type, data);
 		});
 
@@ -324,12 +325,12 @@ export class Peer extends EventEmitter {
 		return session;
 	}
 
-	private _handleIncomingOffer(peerId: string, payload: any): void {
+	private _handleIncomingOffer(peerId: string, payload: Record<string, unknown>): void {
 		this._cleanupPeer(peerId);
 		this._setConnectionState(peerId, ConnectionState.Signaling);
 
 		const session = this._createSession(peerId);
-		session.startAsAnswerer(payload.sdp, this.localStream ?? undefined);
+		session.startAsAnswerer(payload.sdp as RTCSessionDescriptionInit, this.localStream ?? undefined);
 
 		session.on("stream", (remoteStream: MediaStream) => {
 			this.emit("stream", { peerId, stream: remoteStream, call: session });
@@ -459,12 +460,12 @@ export class Peer extends EventEmitter {
 
 		ctrl.onmessage = (e: MessageEvent) => {
 			try {
-				const msg = decode(new Uint8Array(e.data as ArrayBuffer)) as any;
+				const msg = decode(new Uint8Array(e.data as ArrayBuffer)) as Record<string, unknown>;
 				if (msg?.pong) {
 					this._handlePong(peerId);
 				} else if (msg?.ts && !msg.pong) {
 					// Received a ping — reply with pong
-					this._handlePing(peerId, msg.ts);
+					this._handlePing(peerId, msg.ts as number);
 				}
 			} catch {
 				// Ignore malformed control messages
@@ -548,7 +549,7 @@ export class Peer extends EventEmitter {
 
 	// ── Private: Signaling & Data ──
 
-	private _sendSignaling(peerId: string, type: SignalingType, data: any): void {
+	private _sendSignaling(peerId: string, type: SignalingType, data: unknown): void {
 		if (!this._transport) {
 			this._log.error("Transport not connected");
 			return;

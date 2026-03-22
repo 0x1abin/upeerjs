@@ -148,7 +148,7 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 			this._disconnected = false;
 
 			// Subscribe to signaling topic (own peerId)
-			this._mqtt!.subscribe(this._peerId, (err: any) => {
+			this._mqtt!.subscribe(this._peerId, (err: Error | null) => {
 				if (err) {
 					this._log.error("Subscribe error:", err);
 					this.emit("error", err);
@@ -217,19 +217,20 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 		});
 
 		this._mqtt.on("close", () => this.emit("close"));
-		this._mqtt.on("error", (err: any) => this.emit("error", err));
+		this._mqtt.on("error", (err: Error) => this.emit("error", err));
 	}
 
-	private _dispatchMessage(msg: any): void {
-		if (this._messageHandler && msg?.type && msg?.src) {
-			this._messageHandler(msg as SignalingMessage);
+	private _dispatchMessage(msg: unknown): void {
+		const m = msg as Record<string, unknown>;
+		if (this._messageHandler && m?.type && m?.src) {
+			this._messageHandler(m as unknown as SignalingMessage);
 		}
 	}
 
 	private _sendQueuedMessages(): void {
 		const queued = this._messagesQueue.splice(0);
 		for (const { topic, message } of queued) {
-			this._mqtt!.publish(topic, message as any);
+			this._mqtt!.publish(topic, message as unknown as Buffer);
 		}
 	}
 
@@ -249,7 +250,7 @@ export class MqttTransport extends EventEmitter implements ISignalingTransport {
 			}
 			return;
 		}
-		this._mqtt.publish(topic, message as any);
+		this._mqtt.publish(topic, message as unknown as Buffer);
 	}
 
 	disconnect(): void {

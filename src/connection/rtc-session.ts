@@ -16,7 +16,7 @@ export interface RtcSessionEvents {
 	stream: (stream: MediaStream) => void;
 	iceStateChanged: (state: RTCIceConnectionState) => void;
 	close: () => void;
-	signaling: (type: SignalingType, data: any) => void;
+	signaling: (type: SignalingType, data: unknown) => void;
 }
 
 export class RtcSession extends EventEmitter {
@@ -75,13 +75,13 @@ export class RtcSession extends EventEmitter {
 		void this._handleSDP("offer", offerSdp);
 	}
 
-	handleSignaling(type: SignalingType, payload: any): void {
+	handleSignaling(type: SignalingType, payload: Record<string, unknown>): void {
 		switch (type) {
 			case SignalingType.Answer:
-				void this._handleSDP("answer", payload.sdp);
+				void this._handleSDP("answer", payload.sdp as RTCSessionDescriptionInit);
 				break;
 			case SignalingType.Candidate:
-				void this._handleCandidate(payload.candidate);
+				void this._handleCandidate(payload.candidate as RTCIceCandidateInit);
 				break;
 		}
 	}
@@ -207,8 +207,8 @@ export class RtcSession extends EventEmitter {
 					config: this._options.rtcConfig,
 				},
 			);
-		} catch (err: any) {
-			if (err?.toString?.().includes("kHaveRemoteOffer")) return;
+		} catch (err: unknown) {
+			if (err instanceof Error && err.toString().includes("kHaveRemoteOffer")) return;
 			this._log.error("Failed to create/set offer:", err);
 		}
 	}
@@ -230,7 +230,7 @@ export class RtcSession extends EventEmitter {
 		}
 	}
 
-	private async _handleSDP(type: string, sdp: any): Promise<void> {
+	private async _handleSDP(type: string, sdp: RTCSessionDescriptionInit): Promise<void> {
 		const pc = this.peerConnection;
 		if (!pc) return;
 

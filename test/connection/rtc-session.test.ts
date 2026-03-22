@@ -3,8 +3,28 @@ import { RtcSession } from "../../src/connection/rtc-session";
 import { SignalingType } from "../../src/types";
 
 // Mock RTCPeerConnection
-function createMockPC() {
-	const pc: any = {
+interface MockPC {
+	onicecandidate: RTCPeerConnection["onicecandidate"];
+	oniceconnectionstatechange: RTCPeerConnection["oniceconnectionstatechange"];
+	ontrack: RTCPeerConnection["ontrack"];
+	ondatachannel: RTCPeerConnection["ondatachannel"];
+	iceConnectionState: string;
+	signalingState: string;
+	createOffer: ReturnType<typeof vi.fn>;
+	createAnswer: ReturnType<typeof vi.fn>;
+	setLocalDescription: ReturnType<typeof vi.fn>;
+	setRemoteDescription: ReturnType<typeof vi.fn>;
+	addIceCandidate: ReturnType<typeof vi.fn>;
+	addTrack: ReturnType<typeof vi.fn>;
+	getSenders: ReturnType<typeof vi.fn>;
+	getTransceivers: ReturnType<typeof vi.fn>;
+	addTransceiver: ReturnType<typeof vi.fn>;
+	createDataChannel: ReturnType<typeof vi.fn>;
+	close: ReturnType<typeof vi.fn>;
+}
+
+function createMockPC(): MockPC {
+	return {
 		onicecandidate: null,
 		oniceconnectionstatechange: null,
 		ontrack: null,
@@ -28,24 +48,23 @@ function createMockPC() {
 		})),
 		close: vi.fn(),
 	};
-	return pc;
 }
 
-let mockPC: any;
+let mockPC: MockPC;
 
 vi.stubGlobal("RTCPeerConnection", function MockRTCPeerConnection() {
 	mockPC = createMockPC();
 	return mockPC;
 });
 
-vi.stubGlobal("RTCSessionDescription", function MockRTCSessionDescription(init: any) {
+vi.stubGlobal("RTCSessionDescription", function MockRTCSessionDescription(init: RTCSessionDescriptionInit) {
 	return init;
 });
 
 describe("RtcSession", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		mockPC = null;
+		mockPC = undefined!;
 	});
 
 	it("should create session with peerId", () => {
@@ -208,7 +227,7 @@ describe("RtcSession", () => {
 		const mockTrack2 = { kind: "audio" };
 		const mockStream = {
 			getTracks: () => [mockTrack1, mockTrack2],
-		} as any;
+		} as unknown as MediaStream;
 
 		session.startAsOfferer(mockStream);
 
@@ -219,7 +238,7 @@ describe("RtcSession", () => {
 
 	it("should not add tracks in dataOnly mode", () => {
 		const session = new RtcSession("peer-abc");
-		const mockStream = { getTracks: () => [{ kind: "video" }] } as any;
+		const mockStream = { getTracks: () => [{ kind: "video" }] } as unknown as MediaStream;
 
 		session.startAsOfferer(mockStream, true);
 
@@ -269,7 +288,7 @@ describe("RtcSession", () => {
 		const mockStream = {
 			getVideoTracks: () => [newVideoTrack],
 			getAudioTracks: () => [newAudioTrack],
-		} as any;
+		} as unknown as MediaStream;
 
 		session.replaceTrack(mockStream);
 

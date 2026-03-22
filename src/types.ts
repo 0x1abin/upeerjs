@@ -10,15 +10,15 @@ export enum SignalingType {
 
 export interface SignalingMessage {
 	type: SignalingType;
-	data: any;
+	data: unknown;
 	src: string;
 }
 
 // ── Codec ──
 
 export interface ICodec {
-	encode(data: any): Uint8Array;
-	decode(data: Uint8Array): any;
+	encode(data: unknown): Uint8Array;
+	decode(data: Uint8Array): unknown;
 }
 
 // ── Encryption ──
@@ -70,13 +70,13 @@ export interface PeerOptions {
 export interface PeerEvents {
 	open: (peerId: string) => void;
 	close: () => void;
-	error: (err: any) => void;
-	call: (event: { peerId: string; call: any }) => void;
-	stream: (event: { peerId: string; stream: MediaStream; call: any }) => void;
-	hangup: (event: { peerId: string; call: any }) => void;
-	dataConnection: (event: { peerId: string; conn: any }) => void;
-	data: (event: { peerId: string; data: any; conn: any }) => void;
-	dataDisconnect: (event: { peerId: string; conn: any }) => void;
+	error: (err: unknown) => void;
+	call: (event: { peerId: string; call: unknown }) => void;
+	stream: (event: { peerId: string; stream: MediaStream; call: unknown }) => void;
+	hangup: (event: { peerId: string; call: unknown }) => void;
+	dataConnection: (event: { peerId: string; conn: unknown }) => void;
+	data: (event: { peerId: string; data: Uint8Array; conn: unknown }) => void;
+	dataDisconnect: (event: { peerId: string; conn: unknown }) => void;
 	iceConnectionStateChange: (event: {
 		peerId: string;
 		iceConnectionState: RTCIceConnectionState;
@@ -92,6 +92,6 @@ export interface MediaConnectionEvents {
 
 export interface DataConnectionEvents {
 	open: () => void;
-	data: (data: any) => void;
+	data: (data: Uint8Array) => void;
 	close: () => void;
 }

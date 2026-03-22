@@ -24,14 +24,14 @@ describe("DataConnection", () => {
 	});
 
 	it("should initialize data channel settings", () => {
-		new DataConnection(mockDC as any);
+		new DataConnection(mockDC as unknown as RTCDataChannel);
 
 		expect(mockDC.binaryType).toBe("arraybuffer");
 		expect(mockDC.bufferedAmountLowThreshold).toBe(4 * 1024 * 1024); // MAX/2
 	});
 
 	it("should emit open when data channel opens", () => {
-		const dc = new DataConnection(mockDC as any);
+		const dc = new DataConnection(mockDC as unknown as RTCDataChannel);
 		const openHandler = vi.fn();
 		dc.on("open", openHandler);
 
@@ -40,7 +40,7 @@ describe("DataConnection", () => {
 	});
 
 	it("should emit close event and clean up", () => {
-		const dc = new DataConnection(mockDC as any);
+		const dc = new DataConnection(mockDC as unknown as RTCDataChannel);
 		const closeHandler = vi.fn();
 		dc.on("close", closeHandler);
 
@@ -52,7 +52,7 @@ describe("DataConnection", () => {
 	});
 
 	it("should not close twice", () => {
-		const dc = new DataConnection(mockDC as any);
+		const dc = new DataConnection(mockDC as unknown as RTCDataChannel);
 		const closeHandler = vi.fn();
 		dc.on("close", closeHandler);
 
@@ -64,7 +64,7 @@ describe("DataConnection", () => {
 	});
 
 	it("should handle DC close event from remote", () => {
-		const dc = new DataConnection(mockDC as any);
+		const dc = new DataConnection(mockDC as unknown as RTCDataChannel);
 		const closeHandler = vi.fn();
 		dc.on("close", closeHandler);
 
@@ -75,14 +75,14 @@ describe("DataConnection", () => {
 	});
 
 	it("should resolve send immediately when closed", async () => {
-		const dc = new DataConnection(mockDC as any);
+		const dc = new DataConnection(mockDC as unknown as RTCDataChannel);
 		dc.close();
 		// Should not throw, just resolve
 		await dc.send(new Uint8Array([1, 2, 3]));
 	});
 
 	it("should emit raw Uint8Array on message", () => {
-		const dc = new DataConnection(mockDC as any);
+		const dc = new DataConnection(mockDC as unknown as RTCDataChannel);
 		const dataHandler = vi.fn();
 		dc.on("data", dataHandler);
 
@@ -96,7 +96,7 @@ describe("DataConnection", () => {
 	});
 
 	it("should send raw Uint8Array", async () => {
-		const dc = new DataConnection(mockDC as any);
+		const dc = new DataConnection(mockDC as unknown as RTCDataChannel);
 		mockDC.readyState = "open";
 
 		await dc.send(new Uint8Array([5, 6, 7]));
