@@ -88,6 +88,8 @@ describe("RtcSession", () => {
 
 		// Control channel is negotiated with id 0
 		expect(mockPC.createDataChannel).toHaveBeenCalledWith("_ctrl", { negotiated: true, id: 0, ordered: true });
+		// Transfer channel is negotiated with id 1
+		expect(mockPC.createDataChannel).toHaveBeenCalledWith("dc:transfer", { negotiated: true, id: 1, ordered: true });
 		// Application DataChannel uses default label and options
 		expect(mockPC.createDataChannel).toHaveBeenCalledWith("dc:upeer", { ordered: true });
 
@@ -123,10 +125,11 @@ describe("RtcSession", () => {
 
 		expect(session.peerConnection).toBe(mockPC);
 		// Answerer doesn't create application DataChannel
-		// Only control channel is created (negotiated)
+		// Only negotiated channels are created (control + transfer)
 		expect(session.controlChannel).toBeDefined();
-		expect(mockPC.createDataChannel).toHaveBeenCalledTimes(1);
+		expect(mockPC.createDataChannel).toHaveBeenCalledTimes(2);
 		expect(mockPC.createDataChannel).toHaveBeenCalledWith("_ctrl", { negotiated: true, id: 0, ordered: true });
+		expect(mockPC.createDataChannel).toHaveBeenCalledWith("dc:transfer", { negotiated: true, id: 1, ordered: true });
 
 		await vi.waitFor(() => {
 			expect(mockPC.setRemoteDescription).toHaveBeenCalled();
