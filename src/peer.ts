@@ -541,6 +541,9 @@ export class Peer extends EventEmitter {
 
 			if (missed >= Peer.MAX_MISSED_PONGS) {
 				this._log.warn(`Heartbeat timeout for ${peerId}, attempting ICE restart`);
+				// Stop heartbeat BEFORE triggering ICE restart to break the loop.
+				// Heartbeat will restart when ICE goes back to "connected".
+				this._stopHeartbeat(peerId);
 				const session = this._sessions.get(peerId);
 				if (session) {
 					this._setConnectionState(peerId, ConnectionState.Recovering);
