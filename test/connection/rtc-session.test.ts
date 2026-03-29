@@ -10,6 +10,7 @@ interface MockPC {
 	ondatachannel: RTCPeerConnection["ondatachannel"];
 	iceConnectionState: string;
 	signalingState: string;
+	remoteDescription: RTCSessionDescription | null;
 	createOffer: ReturnType<typeof vi.fn>;
 	createAnswer: ReturnType<typeof vi.fn>;
 	setLocalDescription: ReturnType<typeof vi.fn>;
@@ -31,10 +32,13 @@ function createMockPC(): MockPC {
 		ondatachannel: null,
 		iceConnectionState: "new",
 		signalingState: "stable",
+		remoteDescription: null,
 		createOffer: vi.fn(async () => ({ type: "offer", sdp: "mock-offer-sdp" })),
 		createAnswer: vi.fn(async () => ({ type: "answer", sdp: "mock-answer-sdp" })),
 		setLocalDescription: vi.fn(async () => {}),
-		setRemoteDescription: vi.fn(async () => {}),
+		setRemoteDescription: vi.fn(async function (this: MockPC, sdp: RTCSessionDescriptionInit) {
+			this.remoteDescription = sdp as unknown as RTCSessionDescription;
+		}),
 		addIceCandidate: vi.fn(async () => {}),
 		addTrack: vi.fn(),
 		getSenders: vi.fn(() => []),
@@ -163,6 +167,15 @@ describe("RtcSession", () => {
 	it("should handle incoming ICE candidate", async () => {
 		const session = new RtcSession("peer-abc");
 		session.startAsOfferer();
+
+		// Set remote description first (candidates are buffered until this is set)
+		session.handleSignaling(SignalingType.Answer, {
+			sdp: { type: "answer", sdp: "remote-answer" },
+		});
+
+		await vi.waitFor(() => {
+			expect(mockPC.setRemoteDescription).toHaveBeenCalled();
+		});
 
 		const candidate = { candidate: "candidate:...", sdpMid: "0" };
 		session.handleSignaling(SignalingType.Candidate, { candidate });

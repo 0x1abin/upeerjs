@@ -6,7 +6,7 @@ import { AesGcmEncryption } from "./security/aes-gcm-encryption";
 import { MqttTransport } from "./transport/mqtt-transport";
 import { RtcSession } from "./connection/rtc-session";
 import { DataConnection } from "./data/data-connection";
-import type { PeerOptions, ICodec, IEncryption } from "./types";
+import type { PeerOptions, ICodec, IEncryption, ISignalingTransport, IBroadcastTransport } from "./types";
 import { SignalingType } from "./types";
 import { DEFAULT_RTC_CONFIG } from "./util/constants";
 import { createLogger, type Logger } from "./util/logger";
@@ -26,7 +26,7 @@ export class Peer extends EventEmitter {
 
 	private _sessions = new Map<string, RtcSession>();
 	private _dataConnections = new Map<string, DataConnection>();
-	private _transport: MqttTransport | undefined;
+	private _transport: (ISignalingTransport & Partial<IBroadcastTransport> & EventEmitter) | undefined;
 	private _options: PeerOptions;
 	private _codec: ICodec;
 	private _encryption: IEncryption | undefined;
@@ -81,21 +81,9 @@ export class Peer extends EventEmitter {
 		return this._transport?.connected ?? false;
 	}
 
-	/** Connect to the MQTT signaling broker */
+	/** Connect to the signaling transport */
 	start(): void {
-		const brokerUrl = this._options.brokerUrl ?? "wss://broker.emqx.io:8084/mqtt";
-		const mqttOptions = {
-			...this._options.mqttOptions,
-			url: brokerUrl,
-		};
-
-		this._transport = new MqttTransport(
-			this.peerId,
-			mqttOptions,
-			this._codec,
-			this._encryption,
-			this._log,
-		);
+		this._transport = this._createTransport();
 
 		this._transport.onMessage((message) => {
 			const peerId = message.src;
@@ -114,7 +102,7 @@ export class Peer extends EventEmitter {
 			}
 		});
 
-		this._transport.onBroadcast((nodeId, decryptedBytes) => {
+		this._transport.onBroadcast?.((nodeId, decryptedBytes) => {
 			const msg = this._codec.decode(decryptedBytes) as { t: string; d: unknown };
 			const topicMap = this._broadcastSubs.get(nodeId);
 			if (!topicMap) return;
@@ -148,7 +136,7 @@ export class Peer extends EventEmitter {
 			return;
 		}
 		const encoded = this._codec.encode({ t: topic, d: data });
-		this._transport.publishBroadcast(this.peerId, encoded);
+		this._transport.publishBroadcast?.(this.peerId, encoded);
 	}
 
 	/**
@@ -163,8 +151,8 @@ export class Peer extends EventEmitter {
 		if (!handlers) { handlers = new Set(); topicMap.set(topic, handlers); }
 		handlers.add(handler);
 
-		// First subscription for this nodeId → MQTT subscribe
-		if (!this._broadcastUnsubs.has(nodeId) && this._transport) {
+		// First subscription for this nodeId → transport subscribe
+		if (!this._broadcastUnsubs.has(nodeId) && this._transport?.subscribeBroadcast) {
 			const unsub = this._transport.subscribeBroadcast(nodeId);
 			this._broadcastUnsubs.set(nodeId, unsub);
 		}
@@ -304,6 +292,31 @@ export class Peer extends EventEmitter {
 	/** Get the RtcSession for a peer (exposes peerConnection for extra DataChannels) */
 	getSession(peerId: string): RtcSession | undefined {
 		return this._sessions.get(peerId);
+	}
+
+	// ── Private: Transport Factory ──
+
+	private _createTransport(): ISignalingTransport & Partial<IBroadcastTransport> & EventEmitter {
+		if (this._options.transport) {
+			const t = this._options.transport;
+			if (t instanceof EventEmitter) return t as ISignalingTransport & Partial<IBroadcastTransport> & EventEmitter;
+			const wrapper = Object.assign(new EventEmitter(), t);
+			return wrapper as ISignalingTransport & Partial<IBroadcastTransport> & EventEmitter;
+		}
+
+		// Default: MQTT transport
+		const brokerUrl = this._options.brokerUrl ?? "wss://broker.emqx.io:8084/mqtt";
+		const mqttOptions = {
+			...this._options.mqttOptions,
+			url: brokerUrl,
+		};
+		return new MqttTransport(
+			this.peerId,
+			mqttOptions,
+			this._codec,
+			this._encryption,
+			this._log,
+		);
 	}
 
 	// ── Private: Session Management ──

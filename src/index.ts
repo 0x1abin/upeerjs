@@ -11,12 +11,15 @@ export type {
 	ICodec,
 	IEncryption,
 	ISignalingTransport,
+	IBroadcastTransport,
+	TransportEvents,
 	SignalingMessage,
 	TransportMessageHandler,
 } from "./types";
 
 // Transport
 export { MqttTransport } from "./transport/mqtt-transport";
+export { WsTransport } from "./transport/ws-transport";
 
 // Security
 export { AesGcmEncryption } from "./security/aes-gcm-encryption";

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-uPeerJS is a serverless P2P communication library for the browser. It uses MQTT for WebRTC signaling (no custom server needed), AES-GCM E2E encryption on signaling messages, and raw DataChannel transport with backpressure. Think PeerJS but with pluggable transport and encryption. upeerjs provides raw `send(Uint8Array)` — application-level framing and serialization (e.g., cluster protocol) is handled by upper layers.
+uPeerJS is a serverless P2P communication library for the browser. It provides pluggable signaling transport (MQTT over WebSocket or WebSocket relay), AES-GCM E2E encryption on signaling messages, and raw DataChannel transport with backpressure. Think PeerJS but with pluggable transport and encryption. upeerjs provides raw `send(Uint8Array)` — application-level framing and serialization (e.g., cluster protocol) is handled by upper layers.
 
 For full architecture details, interface specs, protocol design, and usage examples, see [docs/design.md](docs/design.md).
 

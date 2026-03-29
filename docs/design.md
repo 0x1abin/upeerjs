@@ -4,13 +4,13 @@
 
 ### What uPeerJS Is
 
-uPeerJS is a **generic, serverless peer-to-peer communication library** for the browser. It provides WebRTC connection management with MQTT-based signaling, end-to-end encryption, and raw DataChannel transport with backpressure — all without requiring a centralized server.
+uPeerJS is a **generic, serverless peer-to-peer communication library** for the browser. It provides WebRTC connection management with pluggable signaling (MQTT or WebSocket), end-to-end encryption, and raw DataChannel transport with backpressure — all without requiring a centralized server.
 
 ### Comparison with PeerJS
 
 | | PeerJS | uPeerJS |
 |---|---|---|
-| **Signaling** | Requires PeerServer (centralized) | MQTT broker relay (serverless, decentralized) |
+| **Signaling** | Requires PeerServer (centralized) | Pluggable: MQTT broker or WebSocket relay (serverless) |
 | **Encryption** | None on signaling | AES-GCM E2E encryption on signaling |
 | **DataChannel** | Basic send/receive | Raw DataChannel with backpressure |
 | **Media + Data** | Separate connection types | Single connection multiplexes media + DataChannel |

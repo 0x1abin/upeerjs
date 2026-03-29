@@ -1,7 +1,7 @@
 import { EventEmitter } from "eventemitter3";
 import mqtt from "mqtt";
 import type { MqttClient, IClientOptions } from "mqtt";
-import type { ICodec, IEncryption, ISignalingTransport, SignalingMessage, TransportMessageHandler } from "../types";
+import type { IBroadcastTransport, ICodec, IEncryption, ISignalingTransport, SignalingMessage, TransportMessageHandler } from "../types";
 import { VERSION } from "../util/constants";
 import { createLogger, type Logger } from "../util/logger";
 
@@ -39,7 +39,7 @@ class TokenBucket {
 	}
 }
 
-export class MqttTransport extends EventEmitter implements ISignalingTransport {
+export class MqttTransport extends EventEmitter implements ISignalingTransport, IBroadcastTransport {
 	private _disconnected = true;
 	private _subscribed = false;
 	private _peerId: string;

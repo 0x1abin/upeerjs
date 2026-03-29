@@ -42,6 +42,20 @@ export interface ISignalingTransport {
 	disconnect(): void;
 }
 
+export interface IBroadcastTransport {
+	subscribeBroadcast(nodeId: string): () => void;
+	publishBroadcast(nodeId: string, data: Uint8Array): Promise<void>;
+	onBroadcast(handler: (nodeId: string, data: Uint8Array) => void): void;
+}
+
+/** Transport events emitted by all transport implementations */
+export interface TransportEvents {
+	open: () => void;
+	close: () => void;
+	error: (err: unknown) => void;
+	disconnected: () => void;
+}
+
 // ── Options ──
 
 export interface PeerOptions {
@@ -49,6 +63,8 @@ export interface PeerOptions {
 	brokerUrl?: string;
 	/** Optional MQTT client options */
 	mqttOptions?: Omit<IClientOptions, "will">;
+	/** Custom transport instance. When provided, brokerUrl/mqttOptions are ignored */
+	transport?: ISignalingTransport & Partial<IBroadcastTransport>;
 	/** E2E encryption key (raw string, must be 16/24/32 bytes for AES) */
 	securityKey?: string;
 	/** WebRTC configuration (ICE servers, etc.) */

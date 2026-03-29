@@ -31,6 +31,7 @@ export class RtcSession extends EventEmitter {
 	private _dataChannelLabel: string;
 	private _dataChannelInit: RTCDataChannelInit;
 	private _log: Logger;
+	private _pendingCandidates: RTCIceCandidateInit[] = [];
 
 	constructor(peerId: string, options: RtcSessionOptions = {}) {
 		super();
@@ -236,6 +237,19 @@ export class RtcSession extends EventEmitter {
 
 		try {
 			await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+
+			// Flush any ICE candidates that arrived before remoteDescription was set
+			if (this._pendingCandidates.length > 0) {
+				const pending = this._pendingCandidates.splice(0);
+				for (const ice of pending) {
+					try {
+						await pc.addIceCandidate(ice);
+					} catch (err) {
+						this._log.error("Failed to add buffered candidate:", err);
+					}
+				}
+			}
+
 			if (type === "offer") {
 				await this._makeAnswer();
 			}
@@ -245,8 +259,17 @@ export class RtcSession extends EventEmitter {
 	}
 
 	private async _handleCandidate(ice: RTCIceCandidateInit): Promise<void> {
+		const pc = this.peerConnection;
+		if (!pc) return;
+
+		// Buffer candidates that arrive before remoteDescription is set
+		if (!pc.remoteDescription) {
+			this._pendingCandidates.push(ice);
+			return;
+		}
+
 		try {
-			await this.peerConnection!.addIceCandidate(ice);
+			await pc.addIceCandidate(ice);
 		} catch (err) {
 			this._log.error("Failed to handleCandidate:", err);
 		}
