@@ -1,5 +1,4 @@
 import { EventEmitter } from "eventemitter3";
-import { encode, decode } from "@msgpack/msgpack";
 import { generatePeerId } from "./util/id-generator";
 import { MsgpackCodec } from "./util/codec";
 import { AesGcmEncryption } from "./security/aes-gcm-encryption";
@@ -42,15 +41,7 @@ export class Peer extends EventEmitter {
 	private _recoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private _reconnectAttempts = new Map<string, number>();
 
-	// Heartbeat
-	private _pingTimers = new Map<string, ReturnType<typeof setInterval>>();
-	private _pongTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
-	private _missedPongs = new Map<string, number>();
-
 	private static readonly ICE_RECOVERY_TIMEOUT_MS = 15_000;
-	private static readonly PING_INTERVAL_MS = 15_000;
-	private static readonly PONG_TIMEOUT_MS = 5_000;
-	private static readonly MAX_MISSED_PONGS = 2;
 
 	constructor(options: PeerOptions);
 	constructor(peerId: string, options: PeerOptions);
@@ -246,7 +237,6 @@ export class Peer extends EventEmitter {
 
 	/** Hang up a specific peer connection */
 	hangup(peerId: string): void {
-		this._stopHeartbeat(peerId);
 		this._clearRecoveryTimer(peerId);
 		const session = this._sessions.get(peerId);
 		if (session) {
@@ -269,7 +259,6 @@ export class Peer extends EventEmitter {
 		this._dataConnections.forEach((conn) => conn.close());
 		this._sessions.clear();
 		this._dataConnections.clear();
-		this._stopAllHeartbeats();
 		this._clearAllRecoveryTimers();
 		this._connectionStates.clear();
 		this._broadcastUnsubs.forEach((unsub) => unsub());
@@ -390,7 +379,6 @@ export class Peer extends EventEmitter {
 				this._clearRecoveryTimer(peerId);
 				this._setConnectionState(peerId, ConnectionState.Connected);
 				this._reconnectAttempts.set(peerId, 0);
-				this._startHeartbeat(peerId);
 				break;
 
 			case "disconnected":
@@ -403,7 +391,6 @@ export class Peer extends EventEmitter {
 
 			case "failed":
 				this._setConnectionState(peerId, ConnectionState.Disconnected);
-				this._stopHeartbeat(peerId);
 				this._clearRecoveryTimer(peerId);
 				// Session will close itself on ICE failed
 				break;
@@ -442,138 +429,9 @@ export class Peer extends EventEmitter {
 	private _handleSessionClose(peerId: string, session: RtcSession): void {
 		this._sessions.delete(peerId);
 		this._dataConnections.delete(peerId);
-		this._stopHeartbeat(peerId);
 		this._clearRecoveryTimer(peerId);
 		this._setConnectionState(peerId, ConnectionState.Disconnected);
 		this.emit("hangup", { peerId, call: session });
-	}
-
-	// ── Private: Heartbeat (via negotiated control channel) ──
-
-	private _startHeartbeat(peerId: string): void {
-		this._stopHeartbeat(peerId);
-		this._missedPongs.set(peerId, 0);
-
-		const session = this._sessions.get(peerId);
-		const ctrl = session?.controlChannel;
-		if (!ctrl) return;
-
-		// Listen for pong responses on the control channel
-		this._setupControlChannelListener(peerId, session);
-
-		// Wait for control channel to open before starting ping interval
-		if (ctrl.readyState === "open") {
-			this._beginPingInterval(peerId);
-		} else {
-			ctrl.addEventListener("open", () => this._beginPingInterval(peerId), { once: true });
-		}
-	}
-
-	private _beginPingInterval(peerId: string): void {
-		// Guard: heartbeat may have been stopped while waiting for channel open
-		if (!this._sessions.has(peerId)) return;
-
-		const timer = setInterval(() => {
-			this._sendPing(peerId);
-		}, Peer.PING_INTERVAL_MS);
-		this._pingTimers.set(peerId, timer);
-	}
-
-	private _setupControlChannelListener(peerId: string, session: RtcSession): void {
-		const ctrl = session.controlChannel;
-		if (!ctrl) return;
-		ctrl.binaryType = "arraybuffer";
-
-		ctrl.onmessage = (e: MessageEvent) => {
-			try {
-				const msg = decode(new Uint8Array(e.data as ArrayBuffer)) as Record<string, unknown>;
-				if (msg?.pong) {
-					this._handlePong(peerId);
-				} else if (msg?.ts && !msg.pong) {
-					// Received a ping — reply with pong
-					this._handlePing(peerId, msg.ts as number);
-				}
-			} catch {
-				// Ignore malformed control messages
-			}
-		};
-	}
-
-	private _stopHeartbeat(peerId: string): void {
-		const pingTimer = this._pingTimers.get(peerId);
-		if (pingTimer) {
-			clearInterval(pingTimer);
-			this._pingTimers.delete(peerId);
-		}
-		const pongTimeout = this._pongTimeouts.get(peerId);
-		if (pongTimeout) {
-			clearTimeout(pongTimeout);
-			this._pongTimeouts.delete(peerId);
-		}
-		this._missedPongs.delete(peerId);
-	}
-
-	private _stopAllHeartbeats(): void {
-		this._pingTimers.forEach((timer) => clearInterval(timer));
-		this._pingTimers.clear();
-		this._pongTimeouts.forEach((timer) => clearTimeout(timer));
-		this._pongTimeouts.clear();
-		this._missedPongs.clear();
-	}
-
-	private _sendPing(peerId: string): void {
-		const session = this._sessions.get(peerId);
-		const ctrl = session?.controlChannel;
-		if (!ctrl || ctrl.readyState !== "open") return;
-
-		try {
-			const payload = encode({ ts: Date.now() });
-			ctrl.send(payload instanceof Uint8Array ? payload as Uint8Array<ArrayBuffer> : new Uint8Array(payload));
-		} catch {
-			// Control channel send failed
-			return;
-		}
-
-		// Set pong timeout
-		const timeout = setTimeout(() => {
-			const missed = (this._missedPongs.get(peerId) ?? 0) + 1;
-			this._missedPongs.set(peerId, missed);
-
-			if (missed >= Peer.MAX_MISSED_PONGS) {
-				this._log.warn(`Heartbeat timeout for ${peerId}, attempting ICE restart`);
-				// Stop heartbeat BEFORE triggering ICE restart to break the loop.
-				// Heartbeat will restart when ICE goes back to "connected".
-				this._stopHeartbeat(peerId);
-				const session = this._sessions.get(peerId);
-				if (session) {
-					this._setConnectionState(peerId, ConnectionState.Recovering);
-					this._attemptIceRestart(peerId, session);
-				}
-			}
-		}, Peer.PONG_TIMEOUT_MS);
-		this._pongTimeouts.set(peerId, timeout);
-	}
-
-	private _handlePong(peerId: string): void {
-		this._missedPongs.set(peerId, 0);
-		const timeout = this._pongTimeouts.get(peerId);
-		if (timeout) {
-			clearTimeout(timeout);
-			this._pongTimeouts.delete(peerId);
-		}
-	}
-
-	private _handlePing(peerId: string, ts: number): void {
-		const session = this._sessions.get(peerId);
-		const ctrl = session?.controlChannel;
-		if (!ctrl || ctrl.readyState !== "open") return;
-
-		try {
-			const payload = encode({ ts, pong: true });
-			ctrl.send(payload instanceof Uint8Array ? payload as Uint8Array<ArrayBuffer> : new Uint8Array(payload));
-		} catch {
-			// Control channel send failed
-		}
 	}
 
 	// ── Private: Signaling & Data ──
@@ -602,7 +460,6 @@ export class Peer extends EventEmitter {
 		});
 		dc.on("close", () => {
 			this._dataConnections.delete(peerId);
-			this._stopHeartbeat(peerId);
 			this.emit("dataDisconnect", { peerId, conn: dc });
 		});
 		return dc;
@@ -615,7 +472,6 @@ export class Peer extends EventEmitter {
 	}
 
 	private _cleanupPeer(peerId: string): void {
-		this._stopHeartbeat(peerId);
 		this._clearRecoveryTimer(peerId);
 		const existingDc = this._dataConnections.get(peerId);
 		if (existingDc) {
