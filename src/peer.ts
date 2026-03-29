@@ -455,10 +455,23 @@ export class Peer extends EventEmitter {
 		this._missedPongs.set(peerId, 0);
 
 		const session = this._sessions.get(peerId);
-		if (!session?.controlChannel) return;
+		const ctrl = session?.controlChannel;
+		if (!ctrl) return;
 
 		// Listen for pong responses on the control channel
 		this._setupControlChannelListener(peerId, session);
+
+		// Wait for control channel to open before starting ping interval
+		if (ctrl.readyState === "open") {
+			this._beginPingInterval(peerId);
+		} else {
+			ctrl.addEventListener("open", () => this._beginPingInterval(peerId), { once: true });
+		}
+	}
+
+	private _beginPingInterval(peerId: string): void {
+		// Guard: heartbeat may have been stopped while waiting for channel open
+		if (!this._sessions.has(peerId)) return;
 
 		const timer = setInterval(() => {
 			this._sendPing(peerId);
